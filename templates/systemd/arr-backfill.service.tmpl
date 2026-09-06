@@ -1,5 +1,8 @@
 [Unit]
 Description=Paced backfill search for missing arr items
+# Nothing watched these before: uptime-kuma sees dead endpoints, not units that ran
+# and failed. The nightly backup failed silently on 2026-09-06 because of that gap.
+OnFailure=ntfy-alert@%n.service
 After=network-online.target
 StartLimitIntervalSec=3600
 StartLimitBurst=3

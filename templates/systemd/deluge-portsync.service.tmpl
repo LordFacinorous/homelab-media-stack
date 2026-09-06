@@ -1,5 +1,8 @@
 [Unit]
 Description=Sync ProtonVPN forwarded port into deluge
+# Nothing watched these before: uptime-kuma sees dead endpoints, not units that ran
+# and failed. The nightly backup failed silently on 2026-09-06 because of that gap.
+OnFailure=ntfy-alert@%n.service
 After=deluge.service
 # a burst of file events must not disable the sync
 StartLimitIntervalSec=0

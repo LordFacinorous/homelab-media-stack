@@ -1,5 +1,8 @@
 [Unit]
 Description=Run recyclarr sync
+# Nothing watched these before: uptime-kuma sees dead endpoints, not units that ran
+# and failed. The nightly backup failed silently on 2026-09-06 because of that gap.
+OnFailure=ntfy-alert@%n.service
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/systemctl --user start recyclarr.service

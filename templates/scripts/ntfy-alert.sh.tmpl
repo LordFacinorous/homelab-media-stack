@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Put a failed systemd user unit on Dakota's phone.
+#
+# Used as:  OnFailure=ntfy-alert@%n.service
+#
+# Why this exists: uptime-kuma watches HTTP endpoints, so it can see a service that
+# stopped answering - but it is structurally blind to a unit that ran, failed, and
+# exited. The nightly backup failed on 2026-09-06 with two of ten pairs dead, and
+# nothing anywhere reported it. Nothing had an OnFailure= at all.
+#
+# Takes the unit name as $1. Reads the alert topic from ntfy-topic.txt (mode 600 - on
+# ntfy.sh anonymous accounts the topic name IS the credential).
+set -uo pipefail
+
+UNIT="${1:?usage: ntfy-alert.sh <unit-name>}"
+TOPIC_FILE=${ARR_DIR}/ntfy-topic.txt
+[ -r "$TOPIC_FILE" ] || { echo "no $TOPIC_FILE" >&2; exit 1; }
+TOPIC=$(tr -d '[:space:]' < "$TOPIC_FILE")
+[ -n "$TOPIC" ] || { echo "empty topic" >&2; exit 1; }
+
+result=$(systemctl --user show "$UNIT" -p Result --value 2>/dev/null)
+status=$(systemctl --user show "$UNIT" -p ExecMainStatus --value 2>/dev/null)
+
+# The last few journal lines are what makes the alert actionable rather than merely
+# alarming. Keep it short - this is read on a phone.
+tail=$(journalctl --user -u "$UNIT" -n 12 --no-pager -o cat 2>/dev/null \
+       | grep -vE '^\s*$' | tail -6 | cut -c1-160)
+
+body="$UNIT failed
+result=$result exit=$status
+$tail"
+
+curl -sS -m 20 \
+  -H "Title: ${UNIT%.service} failed on PRIME" \
+  -H "Priority: high" \
+  -H "Tags: rotating_light" \
+  -d "$body" \
+  "https://ntfy.sh/${TOPIC}" >/dev/null \
+  && echo "alerted for $UNIT" \
+  || { echo "ntfy publish failed for $UNIT" >&2; exit 1; }

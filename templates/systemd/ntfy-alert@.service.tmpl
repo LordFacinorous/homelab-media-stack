@@ -1,0 +1,6 @@
+[Unit]
+Description=Push a failed unit (%i) to the phone over ntfy
+
+[Service]
+Type=oneshot
+ExecStart=${ARR_DIR}/ntfy-alert.sh %i

@@ -26,25 +26,60 @@ PAIRS=(
   "services/arr/config:arr-config"
 )
 
-{
-echo "=========== backup run $(date -Is) ==========="
-rc_total=0
-for pair in "${PAIRS[@]}"; do
-  src="${BASE}/${pair%%:*}"; dst="${CRYPT}:${pair##*:}"
-  [ -e "$src" ] || { echo "-- SKIP (missing): $src"; continue; }
-  echo "-- $src  ->  $dst"
-  rclone sync "$src" "$dst" --exclude-from "$EXCL" \
-      --transfers 24 --checkers 24 --create-empty-src-dirs \
-      --drive-pacer-min-sleep 10ms --drive-pacer-burst 200 \
-      --drive-chunk-size 64M --fast-list \
-      --bwlimit "08:00,512k 23:00,off" \
-      --stats 30s --stats-one-line --log-level NOTICE
-  rc=$?; [ $rc -ne 0 ] && rc_total=$rc && echo "   FAILED rc=$rc"
-done
+# Rate limiting. On 2026-09-06 the projects and arr-config pairs - the two with by far
+# the most files - both died with HTTP 403 rateLimitExceeded, quota_metric
+# drive.googleapis.com/default, quota_unit 1/min/{project}. That is the quota of the
+# SHARED client_id rclone ships with, which every rclone user on earth also uses; the
+# old settings here (24 transfers, 24 checkers, a 10ms pacer and a burst of 200) meant
+# this host arrived at that shared bucket with 48 concurrent workers and no brakes.
+#
+# --tpslimit is the control that actually matters: it caps API transactions per second
+# outright, where --transfers only caps concurrent file bodies. 10/s is far under the
+# limit and the uplink is ~19.5 Mbit anyway, so throughput is unaffected - the previous
+# numbers were buying nothing but 403s.
+#
+# The real fix is a dedicated Google client_id, which moves this off the shared quota
+# entirely. See CLIENT_ID.md next to this script. Until that is done, these brakes are
+# what keeps the backup succeeding.
+RCLONE_OPTS=(
+  --exclude-from "$EXCL"
+  --transfers 4 --checkers 8 --create-empty-src-dirs
+  --tpslimit 10 --tpslimit-burst 10
+  --drive-pacer-min-sleep 100ms --drive-pacer-burst 100
+  --drive-chunk-size 64M --fast-list
+  # A 403 is transient. Failing the whole pair on the first one is how a backup that
+  # only needed to wait ends up not existing.
+  --retries 5 --retries-sleep 30s --low-level-retries 20
+  --bwlimit "08:00,512k 23:00,off"
+  # --log-level NOTICE suppresses the stats lines, which rclone logs at INFO. The result
+  # was a 25-minute run that wrote nothing to the log after the pair header - no way to
+  # tell "working" from "hung". --stats-log-level lifts just the stats to NOTICE.
+  --stats 60s --stats-one-line --log-level NOTICE --stats-log-level NOTICE
+)
 
-echo "=========== finished $(date -Is) rc=$rc_total ==========="
-exit $rc_total
-} 2>&1 | tee "$LOG"
+sync_all() {
+  echo "=========== backup run $(date -Is) ==========="
+  local rc_total=0 failed=""
+  for pair in "${PAIRS[@]}"; do
+    src="${BASE}/${pair%%:*}"; dst="${CRYPT}:${pair##*:}"
+    [ -e "$src" ] || { echo "-- SKIP (missing): $src"; continue; }
+    echo "-- $src  ->  $dst"
+    rclone sync "$src" "$dst" "${RCLONE_OPTS[@]}"
+    rc=$?
+    [ $rc -ne 0 ] && { rc_total=$rc; failed="$failed ${pair##*:}"; echo "   FAILED rc=$rc"; }
+  done
+  [ -n "$failed" ] && echo "FAILED PAIRS:$failed"
+  echo "=========== finished $(date -Is) rc=$rc_total ==========="
+  return $rc_total
+}
+
+# The old form was `{ ...; exit $rc_total; } 2>&1 | tee "$LOG"`. That exit ran in the
+# pipeline's SUBSHELL, so the script's own status came from whatever followed - and
+# systemd recorded ExecMainStatus=0, Result=success, for a run where two of ten pairs
+# had failed. A backup that fails silently is worse than no backup, because you believe
+# you have one. PIPESTATUS[0] is the function's real status.
+sync_all 2>&1 | tee "$LOG"
+rc_total=${PIPESTATUS[0]}
 
 # --- monthly point-in-time tar snapshot -------------------------------------
 # Sync above gives cheap incrementals; this gives a single self-contained
@@ -66,3 +101,8 @@ if [ "$(date +%d)" = "01" ] || [ "${FORCE_SNAPSHOT:-0}" = "1" ]; then
     [ -n "$old" ] && rclone delete "gdrive-crypt:snapshots/$old" && echo "   pruned old snapshot $old"
   done
 fi
+
+# Exit on the SYNC's status, not on whatever the snapshot block happened to leave behind.
+# prime-backup.service has OnFailure=ntfy-alert@%n.service, so this is what puts a failed
+# backup on the phone.
+exit $rc_total

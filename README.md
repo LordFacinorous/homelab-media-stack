@@ -17,7 +17,8 @@ cost an afternoon rather than a weekend.
 | `regenerate-templates.sh` | rebuilds `templates/` **from the live host**. Run after any quadlet change. |
 | `deploy.sh` | `--check` (default) / `--render` / `--install` |
 | `wire.sh` | post-start API wiring. Idempotent, `--dry-run` supported. |
-| `templates/` | 20 quadlets + 9 systemd units + 3 scripts, generated not hand-written |
+| `templates/` | 20 quadlets + 14 systemd units + 6 scripts, generated not hand-written |
+| `docs/google-drive-client-id.md` | why the nightly backup hits `rateLimitExceeded` on rclone's shared client_id, and how to get off it |
 
 ## What it needs
 
@@ -49,6 +50,18 @@ cp stack.env.example stack.env && chmod 600 stack.env && $EDITOR stack.env
 # 4. once the containers have settled (a minute or so)
 ./wire.sh
 ```
+
+## Failures reach the phone
+
+Every oneshot in the stack carries `OnFailure=ntfy-alert@%n.service`, which pushes the
+unit name, its exit status and the last few journal lines to ntfy.
+
+This was added because uptime-kuma is structurally blind to it. Kuma watches HTTP
+endpoints, so it sees a service that stopped answering — but a unit that ran, failed and
+exited answers nothing and was never being watched. The nightly backup failed on
+2026-09-06 with two of ten pairs dead and **systemd recorded `Result=success`**, because
+the script's `exit` ran inside a `| tee` subshell. Nothing anywhere reported it. Both
+halves of that are fixed: the exit status is real, and something is listening for it.
 
 ## The two-phase split, and why it exists
 

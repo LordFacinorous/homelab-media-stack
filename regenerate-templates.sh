@@ -39,15 +39,21 @@ for f in "$SRC_Q"/*.container "$SRC_Q"/*.network; do
 done
 echo "  quadlets templated: $n"
 
-# Only this stack's units. container-*.service are podman-generated, not ours.
+# Glob rather than a hand-kept list. The list version silently omitted every unit added
+# after it was written - recordings-tidy, prime-backup and arr-backfill each had to be
+# noticed and added by hand, and ntfy-alert@ would have been the fourth. Two exclusions,
+# both mechanical:
+#   container-*.service  podman generates these; n8n is not part of this stack
+#   zero-byte files      a zero-length unit is a MASK (recyclarr.timer is masked here to
+#                        kill a stale timer). Shipping it would mask the unit on a fresh
+#                        machine, where there is nothing stale to mask.
 u=0
-for f in deluge-portsync.service deluge-portsync.path livetv-guide.service livetv-guide.timer \
-         ntfy-control.service prime-backup.service prime-backup.timer \
-         recyclarr-sync.service recyclarr-sync.timer \
-         recordings-tidy.service recordings-tidy.timer \
-         arr-backfill.service arr-backfill.timer; do
-  [ -e "$SRC_U/$f" ] || continue
-  render "$SRC_U/$f" > "$DST/systemd/$f.tmpl"
+for f in "$SRC_U"/*.service "$SRC_U"/*.timer "$SRC_U"/*.path; do
+  [ -e "$f" ] || continue
+  b=$(basename "$f")
+  case "$b" in container-*) continue ;; esac
+  [ -s "$f" ] || { echo "  skipped (masked, zero bytes): $b"; continue; }
+  render "$f" > "$DST/systemd/$b.tmpl"
   u=$((u+1))
 done
 echo "  systemd units templated: $u"
