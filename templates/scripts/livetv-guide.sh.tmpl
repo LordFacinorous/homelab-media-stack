@@ -28,6 +28,9 @@ import re, sys, collections
 work, jf = sys.argv[1], sys.argv[2]
 
 WANT = {"news", "movies", "classic"}
+# Anime by name rather than by the Animation category: that category is mostly
+# kids programming (3ABN Kids, Mr. Bean, Nickelodeon) which is not wanted here.
+ANIME = r"\b(anime|toonami|crunchyroll|hidive|naruto|one piece|midnight pulp)\b"
 lines = open(f"{work}/us.m3u", encoding="utf-8").read().splitlines()
 
 kept, seen = [], set()
@@ -43,7 +46,9 @@ while i < len(lines):
     name = ext.split(",", 1)[1].strip() if "," in ext else ""
     gm = re.search(r'group-title="([^"]*)"', ext)
     groups = {g.strip().lower() for g in gm.group(1).split(";")} if gm else set()
-    if not (groups & WANT or re.search(r"\b(NHL|hockey)\b", name, re.I)):
+    if not (groups & WANT
+            or re.search(r"\b(NHL|hockey)\b", name, re.I)
+            or re.search(ANIME, name, re.I)):
         continue
     seen.add(url)
     # Join to the guide: Pluto's own channel id is inside the stream URL.
