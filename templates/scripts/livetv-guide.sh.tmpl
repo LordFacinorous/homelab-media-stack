@@ -27,7 +27,7 @@ python3 - "$WORK" "$JF" <<'PY'
 import re, sys, collections
 work, jf = sys.argv[1], sys.argv[2]
 
-WANT = {"news", "movies", "classic"}
+WANT = {"news", "movies", "classic", "kids"}
 # Anime by name rather than by the Animation category: that category is mostly
 # kids programming (3ABN Kids, Mr. Bean, Nickelodeon) which is not wanted here.
 ANIME = r"\b(anime|toonami|crunchyroll|hidive|naruto|one piece|midnight pulp)\b"
