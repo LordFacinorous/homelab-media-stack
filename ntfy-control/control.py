@@ -18,8 +18,10 @@ SECURITY MODEL - read this before extending:
     the arr services directory mounted and the arr network attached - no podman
     socket, no host filesystem, no route to any other subnet. A compromise of this
     command channel therefore cannot reach past the arr suite.
-  * 'repair' requires FIX_TOKEN, so a leaked topic name alone cannot start a session
-    that is able to change anything.
+  * 'repair <token>' requires FIX_TOKEN, so a leaked topic name alone cannot start a
+    session able to change anything. 'repair stop' and 'repair status' are open: they
+    reduce privilege or read it, and gating those while `restart` stays open would be
+    backwards.
 """
 import collections
 import json
@@ -106,7 +108,7 @@ def c_help(_):
         "logs <svc> [n]   last n log lines (default 20)\n"
         "repair <token>   start a sandboxed Claude session with Remote Control;\n"
         "                 drive it from the Claude app, not from here\n"
-        "repair stop <tok> end that session\n"
+        "repair stop      end that session\n"
         "repair status    is it running\n"
         "\nservices: " + ", ".join(sorted(ALLOWED_UNITS))
     )
@@ -202,9 +204,11 @@ def c_repair(arg):
     """
     parts = arg.strip().split()
     sub = parts[0] if parts else ""
-    # 'status' is harmless and stays open. 'stop' does NOT: without a token, anyone who
-    # learned the topic could kill a running repair session at will - cheap denial of
-    # service against the one tool you'd use to recover. Token required, same as start.
+    # 'status' and 'stop' are both open. Requiring a token to STOP was a mistake:
+    # stopping reduces privilege, and `restart gluetun` - which drops the VPN - needs
+    # no token at all. Gating the safe direction while the disruptive one stays open
+    # is backwards, and it is daily friction for no real protection.
+    # 'start' still needs the token, because that is what grants Claude write access.
     if sub == "status":
         try:
             r = subprocess.run(["/bin/bash", RUNNER, "status"],
@@ -213,8 +217,6 @@ def c_repair(arg):
         except subprocess.TimeoutExpired:
             return "repair status timed out"
     if sub == "stop":
-        if len(parts) < 2 or parts[1] != FIX_TOKEN:
-            return "stopping needs the token: repair stop <token>"
         try:
             r = subprocess.run(["/bin/bash", RUNNER, "stop"],
                                capture_output=True, text=True, timeout=60)
