@@ -1,0 +1,12 @@
+[Unit]
+Description=Paced backfill search for missing arr items
+After=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+ExecStart=${ARR_DIR}/backfill.py
+TimeoutStartSec=1800
+Nice=10
+IOSchedulingClass=idle

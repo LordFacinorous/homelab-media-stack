@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly paced backfill of missing episodes/movies/albums
+
+[Timer]
+# Hourly at :37 - deliberately offset from the guide rebuild (05:32) and the
+# recording tidy (:12) so they never contend for the indexers or the disk.
+OnCalendar=*-*-* *:37:00
+RandomizedDelaySec=8m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

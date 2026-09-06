@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""
+Paced backfill for the arr suite.
+
+Why this exists: none of Sonarr, Radarr or Lidarr has a scheduled search for missing
+items. RSS Sync only catches releases as they are newly posted, so anything already
+released stays missing forever unless a human triggers a search. As of 2026-09-06 that
+was 2,650 items - a library that would never fill itself.
+
+Why it is paced: adding 47 artists with search-on-add fired ~50 simultaneous searches
+and Prowlarr rate-limited its own indexers within seconds ("Indexer is disabled till
+... due to recent failures"). Small batches with gaps avoid that; a 429 check aborts
+the run rather than digging the hole deeper.
+
+Each run takes a *random* slice of the backlog, so successive runs work through it
+instead of hammering the same first N items forever.
+
+  ./backfill.py            one paced run  (intended for the systemd timer)
+  ./backfill.py --dry-run  show what it would search, touch nothing
+  ./backfill.py --limit N  items per app this run (default 12)
+"""
+import json
+import random
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+
+DRY = "--dry-run" in sys.argv
+LIMIT = 12
+if "--limit" in sys.argv:
+    try:
+        LIMIT = int(sys.argv[sys.argv.index("--limit") + 1])
+    except (IndexError, ValueError):
+        pass
+
+CFG = "${ARR_DIR}/config"
+BATCH = 4          # searches fired at once
+GAP = 45           # seconds between batches - the pacing that avoids the 429
+
+APPS = [
+    # name,     port, api, command,          id field for the search payload
+    ("sonarr",  8989, "v3", "EpisodeSearch", "episodeIds"),
+    ("radarr",  7878, "v3", "MoviesSearch",  "movieIds"),
+    ("lidarr",  8686, "v1", "AlbumSearch",   "albumIds"),
+]
+
+
+def key(app):
+    with open(f"{CFG}/{app}/config.xml") as fh:
+        return re.search(r"<ApiKey>([^<]+)</ApiKey>", fh.read()).group(1)
+
+
+def call(app, port, api, path, method="GET", body=None, timeout=90):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/{api}{path}", method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"X-Api-Key": key(app), "Content-Type": "application/json"})
+    raw = urllib.request.urlopen(req, timeout=timeout).read()
+    return json.loads(raw) if raw else None
+
+
+def rate_limited(app):
+    """Prowlarr disables an indexer after repeated failures and the arr app logs a 429.
+    Seeing one means back off now, not push harder."""
+    try:
+        with open(f"{CFG}/{app}/logs/{app}.txt", errors="ignore") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - 6000))
+            return "429" in fh.read()
+    except Exception:
+        return False
+
+
+def log(*a):
+    print(time.strftime("%H:%M:%S"), *a, flush=True)
+
+
+total = 0
+for app, port, api, command, idfield in APPS:
+    try:
+        head = call(app, port, api, "/wanted/missing?pageSize=1")
+    except Exception as exc:
+        log(f"{app}: unreachable ({exc}) - skipping")
+        continue
+    missing = head.get("totalRecords", 0)
+    if not missing:
+        log(f"{app}: nothing missing")
+        continue
+
+    # Take a random page so consecutive runs cover different parts of the backlog
+    # rather than retrying the same head of the list forever.
+    pages = max(1, (missing + LIMIT - 1) // LIMIT)
+    page = random.randint(1, min(pages, 200))
+    try:
+        recs = call(app, port, api,
+                    f"/wanted/missing?page={page}&pageSize={LIMIT}").get("records", [])
+    except Exception as exc:
+        log(f"{app}: could not fetch page {page} ({exc})")
+        continue
+
+    ids = [r["id"] for r in recs]
+    if not ids:
+        continue
+    log(f"{app}: {missing} missing, searching {len(ids)} from page {page}")
+    if DRY:
+        for r in recs[:5]:
+            log(f"    would search: {str(r.get('title') or r.get('seriesTitle'))[:56]}")
+        continue
+
+    for i in range(0, len(ids), BATCH):
+        if rate_limited(app):
+            log(f"{app}: 429 seen - backing off, leaving the rest for the next run")
+            break
+        try:
+            call(app, port, api, "/command", "POST",
+                 {"name": command, idfield: ids[i:i + BATCH]})
+            total += len(ids[i:i + BATCH])
+        except urllib.error.HTTPError as exc:
+            log(f"{app}: search failed {exc.code} - {exc.read()[:120].decode()}")
+            break
+        time.sleep(GAP)
+
+log(f"done - {total} items searched this run")

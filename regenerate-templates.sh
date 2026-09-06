@@ -44,7 +44,8 @@ u=0
 for f in deluge-portsync.service deluge-portsync.path livetv-guide.service livetv-guide.timer \
          ntfy-control.service prime-backup.service prime-backup.timer \
          recyclarr-sync.service recyclarr-sync.timer \
-         recordings-tidy.service recordings-tidy.timer; do
+         recordings-tidy.service recordings-tidy.timer \
+         arr-backfill.service arr-backfill.timer; do
   [ -e "$SRC_U/$f" ] || continue
   render "$SRC_U/$f" > "$DST/systemd/$f.tmpl"
   u=$((u+1))
@@ -52,7 +53,9 @@ done
 echo "  systemd units templated: $u"
 
 s=0
-for f in "$SRC_S"/*.sh "$HOME/services/backup/backup.sh"; do
+# *.py as well as *.sh: backfill.py is Python, and globbing only *.sh would ship a
+# timer whose ExecStart points at a script the deployer never installs.
+for f in "$SRC_S"/*.sh "$SRC_S"/*.py "$HOME/services/backup/backup.sh"; do
   [ -e "$f" ] || continue
   render "$f" > "$DST/scripts/$(basename "$f").tmpl"
   s=$((s+1))
