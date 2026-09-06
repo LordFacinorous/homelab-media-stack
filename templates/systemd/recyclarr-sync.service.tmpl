@@ -1,0 +1,5 @@
+[Unit]
+Description=Run recyclarr sync
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl --user start recyclarr.service

@@ -1,0 +1,20 @@
+[Unit]
+Description=jellystat (Jellyfin analytics)
+After=network-online.target jellystat-db.service
+Requires=jellystat-db.service
+[Container]
+ContainerName=jellystat
+Image=docker.io/cyfershepard/jellystat:latest
+EnvironmentFile=${ARR_DIR}/config/jellystat.env
+Environment=POSTGRES_IP=jellystat-db
+Environment=POSTGRES_PORT=5432
+Environment=TZ=${TZ}
+Volume=${ARR_DIR}/config/jellystat:/app/backend/backup-data
+Network=arr.network
+PublishPort=127.0.0.1:3005:3000
+PublishPort=${TAILNET_IP}:3005:3000
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+[Install]
+WantedBy=default.target

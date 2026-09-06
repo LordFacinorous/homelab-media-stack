@@ -1,0 +1,24 @@
+[Unit]
+Description=sabnzbd (arr suite)
+RequiresMountsFor=${MEDIA_ROOT}
+After=network-online.target
+
+[Container]
+ContainerName=sabnzbd
+Image=docker.io/linuxserver/sabnzbd:latest
+UserNS=keep-id
+Environment=PUID=${PUID}
+Environment=PGID=${PGID}
+Environment=TZ=${TZ}
+Volume=${ARR_DIR}/config/sabnzbd:/config
+Volume=${MEDIA_ROOT}:/data
+Network=arr.network
+PublishPort=127.0.0.1:8282:8080
+PublishPort=${TAILNET_IP}:8282:8080
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

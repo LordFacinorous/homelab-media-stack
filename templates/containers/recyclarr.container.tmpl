@@ -1,0 +1,17 @@
+[Unit]
+Description=recyclarr (TRaSH Guides quality profile sync)
+After=network-online.target
+
+[Container]
+ContainerName=recyclarr
+Image=ghcr.io/recyclarr/recyclarr:8
+UserNS=keep-id
+Environment=TZ=${TZ}
+Environment=RECYCLARR_CONFIG_DIR=/config
+Volume=${ARR_DIR}/config/recyclarr:/config
+Network=arr.network
+Exec=sync
+
+[Service]
+Type=oneshot
+RemainAfterExit=no

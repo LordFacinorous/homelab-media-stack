@@ -1,0 +1,24 @@
+[Unit]
+Description=radarr (arr suite)
+RequiresMountsFor=${MEDIA_ROOT}
+After=network-online.target
+
+[Container]
+ContainerName=radarr
+Image=docker.io/linuxserver/radarr:latest
+UserNS=keep-id
+Environment=PUID=${PUID}
+Environment=PGID=${PGID}
+Environment=TZ=${TZ}
+Volume=${ARR_DIR}/config/radarr:/config
+Volume=${MEDIA_ROOT}:/data
+Network=arr.network
+PublishPort=127.0.0.1:7878:7878
+PublishPort=${TAILNET_IP}:7878:7878
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

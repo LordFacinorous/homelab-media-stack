@@ -1,0 +1,60 @@
+// Tailscale access policy for tailnet you@example.com
+// Paste in: login.tailscale.com -> Access Controls
+//
+// Guest login guest@example.com was resolved with
+//   tailscale whois 100.94.29.18
+// the address his machine connected from. Paste as-is; nothing to fill in.
+{
+  "hosts": {
+    "media-host": "100.100.100.100"
+  },
+
+  "acls": [
+    // Your own users and devices keep unrestricted access to the whole tailnet.
+    // THIS LINE REPLACES the stock rule `{"src": ["*"], "dst": ["*:*"]}`.
+    // Leaving "*" in place is what currently grants the guest everything — if you keep
+    // that rule, nothing below restricts him.
+    {
+      "action": "accept",
+      "src":    ["autogroup:member"],
+      "dst":    ["*:*"]
+    },
+
+    // The shared guest may reach ONLY Jellyfin and Jellyseerr, over HTTPS, on PRIME.
+    // 443  -> jellyfin   (tailscale serve)
+    // 8443 -> jellyseerr (tailscale serve)
+    {
+      "action": "accept",
+      "src":    ["guest@example.com"],
+      "dst":    ["media-host:443", "media-host:8443"]
+    }
+  ],
+
+  // Assertions. Tailscale refuses to save the policy if any of these fail, so the
+  // lockdown is verified at save time rather than hoped for.
+  "tests": [
+    {
+      "src": "guest@example.com",
+      "accept": [
+        "media-host:443",
+        "media-host:8443"
+      ],
+      "deny": [
+        "media-host:8096",
+        "media-host:5055",
+        "media-host:8989",
+        "media-host:7878",
+        "media-host:8686",
+        "media-host:9696",
+        "media-host:8112",
+        "media-host:8282",
+        "media-host:6767",
+        "media-host:7474",
+        "media-host:3000",
+        "media-host:3001",
+        "media-host:3005",
+        "media-host:22"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted backup of PRIME
+
+[Timer]
+# 03:20 local, with jitter so it doesn't collide with anything else
+OnCalendar=*-*-* 03:20:00
+RandomizedDelaySec=40m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

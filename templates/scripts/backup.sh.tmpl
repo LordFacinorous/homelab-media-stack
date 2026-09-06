@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Encrypted incremental backup of PRIME's irreplaceable data to Google Drive.
+# Remote chain: gdrive (raw) <- gdrive-crypt (client-side encrypted).
+# Google only ever sees ciphertext, including filenames.
+set -uo pipefail
+BASE=${STACK_HOME}
+CRYPT=gdrive-crypt
+LOG=${STACK_HOME}/services/backup/last-run.log
+EXCL=${STACK_HOME}/services/backup/exclude.txt
+
+if ! rclone listremotes 2>/dev/null | grep -q "^${CRYPT}:"; then
+  echo "ERROR: ${CRYPT}: remote not configured. Run 'rclone config' first." >&2; exit 1
+fi
+
+# source:destination pairs - only things that exist nowhere else
+PAIRS=(
+  "projects:projects"
+  "noosphere-prime:vault"
+  "tasks:tasks"
+  "knowledge:knowledge"
+  "docs:docs"
+  "Documents/DRACONIDS:draconids"
+  "Documents/DRACONIDS_git_backup_20260810:draconids-git-backup"
+  "Documents/School:school"
+  "Documents/ED:ed"
+  "services/arr/config:arr-config"
+)
+
+{
+echo "=========== backup run $(date -Is) ==========="
+rc_total=0
+for pair in "${PAIRS[@]}"; do
+  src="${BASE}/${pair%%:*}"; dst="${CRYPT}:${pair##*:}"
+  [ -e "$src" ] || { echo "-- SKIP (missing): $src"; continue; }
+  echo "-- $src  ->  $dst"
+  rclone sync "$src" "$dst" --exclude-from "$EXCL" \
+      --transfers 24 --checkers 24 --create-empty-src-dirs \
+      --drive-pacer-min-sleep 10ms --drive-pacer-burst 200 \
+      --drive-chunk-size 64M --fast-list \
+      --bwlimit "08:00,512k 23:00,off" \
+      --stats 30s --stats-one-line --log-level NOTICE
+  rc=$?; [ $rc -ne 0 ] && rc_total=$rc && echo "   FAILED rc=$rc"
+done
+
+echo "=========== finished $(date -Is) rc=$rc_total ==========="
+exit $rc_total
+} 2>&1 | tee "$LOG"
+
+# --- monthly point-in-time tar snapshot -------------------------------------
+# Sync above gives cheap incrementals; this gives a single self-contained
+# artifact you can restore from without rclone's index. Runs on the 1st only.
+if [ "$(date +%d)" = "01" ] || [ "${FORCE_SNAPSHOT:-0}" = "1" ]; then
+  SNAP="/tmp/prime-snapshot-$(date +%Y%m%d).tar.zst"
+  echo "-- monthly snapshot -> $SNAP"
+  tar -C ${STACK_HOME} \
+      --exclude-from=${STACK_HOME}/services/backup/exclude.txt \
+      -cf - projects noosphere-prime tasks knowledge docs \
+            Documents/DRACONIDS Documents/School Documents/ED \
+            services/arr/config 2>/dev/null \
+    | zstd -T0 -3 -q -o "$SNAP" \
+    && rclone copy "$SNAP" gdrive-crypt:snapshots --stats-one-line \
+    && echo "   snapshot uploaded: $(du -h "$SNAP" | cut -f1)"
+  rm -f "$SNAP"
+  # keep only the 6 most recent snapshots
+  rclone lsf gdrive-crypt:snapshots 2>/dev/null | sort | head -n -6 | while read -r old; do
+    [ -n "$old" ] && rclone delete "gdrive-crypt:snapshots/$old" && echo "   pruned old snapshot $old"
+  done
+fi

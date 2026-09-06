@@ -1,0 +1,24 @@
+[Unit]
+Description=lidarr (arr suite)
+RequiresMountsFor=${MEDIA_ROOT}
+After=network-online.target
+
+[Container]
+ContainerName=lidarr
+Image=docker.io/linuxserver/lidarr:latest
+UserNS=keep-id
+Environment=PUID=${PUID}
+Environment=PGID=${PGID}
+Environment=TZ=${TZ}
+Volume=${ARR_DIR}/config/lidarr:/config
+Volume=${MEDIA_ROOT}:/data
+Network=arr.network
+PublishPort=127.0.0.1:8686:8686
+PublishPort=${TAILNET_IP}:8686:8686
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

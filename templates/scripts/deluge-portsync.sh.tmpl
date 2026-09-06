@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Push ProtonVPN's forwarded port into deluge's listen_ports.
+# Proton reissues the port on every reconnect; without this, deluge keeps listening on a
+# port the tunnel no longer forwards and incoming peers stop arriving — silently.
+set -uo pipefail
+
+PORT_FILE=${ARR_DIR}/config/gluetun/forwarded_port
+LOG() { printf '%s %s\n' "$(date -Is)" "$*"; }
+
+[ -r "$PORT_FILE" ] || { LOG "no port file at $PORT_FILE — nothing to do"; exit 0; }
+PF=$(tr -cd '0-9' < "$PORT_FILE")
+[ -n "$PF" ] && [ "$PF" -ge 1024 ] && [ "$PF" -le 65535 ] || { LOG "port file holds no usable port: '$PF'"; exit 1; }
+
+# deluge shares gluetun's netns; if it is not up there is nothing to configure yet.
+podman container exists deluge || { LOG "deluge container not present"; exit 0; }
+[ "$(podman inspect -f '{{.State.Running}}' deluge)" = "true" ] || { LOG "deluge not running"; exit 0; }
+
+CUR=$(podman exec deluge deluge-console -c /config 'config listen_ports' 2>/dev/null \
+      | grep -o 'listen_ports: ([0-9]*' | tr -cd '0-9')
+if [ "$CUR" = "$PF" ]; then
+  LOG "listen_ports already $PF — no change"
+  exit 0
+fi
+
+podman exec deluge deluge-console -c /config "config --set listen_ports ($PF,$PF)" >/dev/null 2>&1
+podman exec deluge deluge-console -c /config 'config --set random_port False'      >/dev/null 2>&1
+NEW=$(podman exec deluge deluge-console -c /config 'config listen_ports' 2>/dev/null \
+      | grep -o 'listen_ports: ([0-9]*' | tr -cd '0-9')
+if [ "$NEW" = "$PF" ]; then
+  LOG "listen_ports ${CUR:-unknown} -> $PF"
+else
+  LOG "FAILED to set listen_ports to $PF (deluge still reports '${NEW:-unknown}')"
+  exit 1
+fi

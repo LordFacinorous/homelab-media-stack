@@ -1,0 +1,17 @@
+[Unit]
+Description=autobrr (realtime release grabbing)
+After=network-online.target
+[Container]
+ContainerName=autobrr
+Image=ghcr.io/autobrr/autobrr:latest
+UserNS=keep-id
+Environment=TZ=${TZ}
+Volume=${ARR_DIR}/config/autobrr:/config
+Network=arr.network
+PublishPort=127.0.0.1:7474:7474
+PublishPort=${TAILNET_IP}:7474:7474
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+[Install]
+WantedBy=default.target

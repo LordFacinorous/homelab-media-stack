@@ -1,0 +1,11 @@
+[Unit]
+Description=Rebuild the Live TV playlist and EPG for Jellyfin
+After=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+ExecStart=${ARR_DIR}/livetv-guide.sh
+Nice=10
+IOSchedulingClass=idle

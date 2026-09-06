@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Build Jellyfin's Live TV channel list and matching EPG.
+#
+# Why this exists: iptv-org publishes channels but NO prebuilt guide - its guides.json
+# is a catalogue of scrapeable sites with no urls, and running their grabber is a whole
+# service. Meanwhile i.mjh.nz publishes a ready XMLTV for Pluto TV, keyed by Pluto's
+# internal channel ids. The iptv-org playlist embeds those same ids in its stream URLs
+# (jmp2.uk/plu-<id>.m3u8), so the two can be joined by rewriting tvg-id.
+#
+# Result: every Pluto channel gets real guide data; the rest still play, just without it.
+set -uo pipefail
+
+JF=${ARR_DIR}/config/jellyfin
+SRC="https://iptv-org.github.io/iptv/countries/us.m3u"
+EPG="https://i.mjh.nz/PlutoTV/us.xml.gz"
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+LOG() { printf '%s %s\n' "$(date -Is)" "$*"; }
+
+curl -sfL -m 180 "$SRC" -o "$WORK/us.m3u" || { LOG "playlist download failed"; exit 1; }
+curl -sfL -m 180 "$EPG" -o "$WORK/epg.xml.gz" || { LOG "epg download failed"; exit 1; }
+gunzip -f "$WORK/epg.xml.gz" || { LOG "epg was not gzip"; exit 1; }
+
+[ -s "$WORK/us.m3u" ] && [ -s "$WORK/epg.xml" ] || { LOG "empty download, keeping previous"; exit 1; }
+
+python3 - "$WORK" "$JF" <<'PY'
+import re, sys, collections
+work, jf = sys.argv[1], sys.argv[2]
+
+WANT = {"news", "movies", "classic"}
+lines = open(f"{work}/us.m3u", encoding="utf-8").read().splitlines()
+
+kept, seen = [], set()
+i = 0
+while i < len(lines):
+    if not lines[i].startswith("#EXTINF"):
+        i += 1
+        continue
+    ext, url = lines[i], (lines[i + 1] if i + 1 < len(lines) else "")
+    i += 2
+    if not url.startswith("http") or url in seen:
+        continue
+    name = ext.split(",", 1)[1].strip() if "," in ext else ""
+    gm = re.search(r'group-title="([^"]*)"', ext)
+    groups = {g.strip().lower() for g in gm.group(1).split(";")} if gm else set()
+    if not (groups & WANT or re.search(r"\b(NHL|hockey)\b", name, re.I)):
+        continue
+    seen.add(url)
+    # Join to the guide: Pluto's own channel id is inside the stream URL.
+    plu = re.search(r"/plu-([0-9a-f]{16,})", url)
+    if plu:
+        ext = re.sub(r'tvg-id="[^"]*"', f'tvg-id="{plu.group(1)}"', ext)
+    kept.append((name, ext, url))
+
+kept.sort(key=lambda x: x[0].lower())
+with open(f"{jf}/curated-us.m3u", "w", encoding="utf-8") as f:
+    f.write("#EXTM3U\n")
+    for _, ext, url in kept:
+        f.write(ext + "\n" + url + "\n")
+
+# Trim the EPG to channels actually in the playlist, so Jellyfin is not parsing
+# hundreds of guides for channels it will never show.
+ids = {m.group(1) for _, e, _ in kept if (m := re.search(r'tvg-id="([0-9a-f]{16,})"', e))}
+epg = open(f"{work}/epg.xml", encoding="utf-8").read()
+chan = len(re.findall(r"<channel id=", epg))
+with open(f"{jf}/pluto-epg.xml", "w", encoding="utf-8") as f:
+    f.write(epg)
+print(f"  channels kept: {len(kept)}  with guide ids: {len(ids)}  epg channels: {chan}")
+PY
+
+LOG "playlist -> $JF/curated-us.m3u ; guide -> $JF/pluto-epg.xml"

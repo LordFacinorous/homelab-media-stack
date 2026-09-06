@@ -1,0 +1,9 @@
+[Unit]
+Description=Sync ProtonVPN forwarded port into deluge
+After=deluge.service
+# a burst of file events must not disable the sync
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=${ARR_DIR}/deluge-portsync.sh

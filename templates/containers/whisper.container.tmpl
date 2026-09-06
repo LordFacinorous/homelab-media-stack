@@ -1,0 +1,21 @@
+[Unit]
+Description=whisper ASR (generates subtitles when none exist)
+After=network-online.target
+# a crash loop must not run unbounded (this one hit 398 restarts)
+StartLimitIntervalSec=300
+StartLimitBurst=5
+[Container]
+ContainerName=whisper
+Image=docker.io/onerahmet/openai-whisper-asr-webservice:latest
+Environment=TZ=${TZ}
+Environment=ASR_MODEL=base
+Environment=ASR_ENGINE=faster_whisper
+Volume=${ARR_DIR}/config/whisper:/root/.cache
+Network=arr.network
+PublishPort=127.0.0.1:9000:9000
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=1800
+[Install]
+WantedBy=default.target

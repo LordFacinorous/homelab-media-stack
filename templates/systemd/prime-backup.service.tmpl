@@ -1,0 +1,11 @@
+[Unit]
+Description=Encrypted incremental backup of PRIME's irreplaceable data to Google Drive
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=${STACK_HOME}/services/backup/backup.sh
+# uplink is ~8Mbit/s and shared - stay off the throat of it
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+TimeoutStartSec=6h

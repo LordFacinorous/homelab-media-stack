@@ -1,0 +1,29 @@
+[Unit]
+Description=deluge (arr suite, inside the gluetun tunnel)
+RequiresMountsFor=${MEDIA_ROOT}
+# structural killswitch: deluge has no network of its own. If gluetun goes away,
+# the namespace goes with it and deluge stops rather than falling back to the home WAN.
+BindsTo=gluetun.service
+After=gluetun.service
+# pull the forwarded port in once deluge is up
+Wants=deluge-portsync.service
+
+[Container]
+ContainerName=deluge
+Image=docker.io/linuxserver/deluge:latest
+UserNS=keep-id
+Environment=PUID=${PUID}
+Environment=PGID=${PGID}
+Environment=TZ=${TZ}
+Volume=${ARR_DIR}/config/deluge:/config
+Volume=${MEDIA_ROOT}:/data
+# no ports published here — they belong to gluetun, whose netns this joins
+Network=container:gluetun
+
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

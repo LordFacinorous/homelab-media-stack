@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Live TV playlist + EPG refresh
+
+[Timer]
+# Pluto's guide only runs a couple of days ahead, so this must not lapse.
+OnCalendar=*-*-* 05:20:00
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

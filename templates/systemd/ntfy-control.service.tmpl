@@ -1,0 +1,17 @@
+[Unit]
+Description=ntfy control channel (phone -> whitelisted host commands)
+After=network-online.target
+# a bad config must not hot-loop
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 ${NTFY_DIR}/control.py
+Restart=always
+RestartSec=15
+# the daemon itself never needs to write anything outside its own directory
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

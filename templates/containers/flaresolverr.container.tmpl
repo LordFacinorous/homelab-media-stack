@@ -1,0 +1,17 @@
+[Unit]
+Description=flaresolverr (arr suite)
+After=network-online.target
+
+[Container]
+ContainerName=flaresolverr
+Image=ghcr.io/flaresolverr/flaresolverr:latest
+Environment=TZ=${TZ}
+Environment=LOG_LEVEL=info
+Network=arr.network
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

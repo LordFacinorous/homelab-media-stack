@@ -1,0 +1,25 @@
+[Unit]
+Description=jellyfin (arr suite)
+RequiresMountsFor=${MEDIA_ROOT}
+After=network-online.target
+
+[Container]
+ContainerName=jellyfin
+Image=docker.io/linuxserver/jellyfin:latest
+Environment=PUID=0
+Environment=PGID=0
+Environment=TZ=${TZ}
+Volume=${ARR_DIR}/config/jellyfin:/config
+Volume=${MEDIA_ROOT}:/data
+AddDevice=/dev/dri
+Network=arr.network
+PublishPort=0.0.0.0:8096:8096
+PublishPort=0.0.0.0:8920:8920
+PublishPort=0.0.0.0:7359:7359/udp
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=postgres for jellystat
+After=network-online.target
+[Container]
+ContainerName=jellystat-db
+Image=docker.io/library/postgres:16-alpine
+EnvironmentFile=${ARR_DIR}/config/jellystat.env
+Volume=${ARR_DIR}/config/jellystat-db:/var/lib/postgresql/data
+Network=arr.network
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+[Install]
+WantedBy=default.target

@@ -1,0 +1,30 @@
+[Unit]
+Description=gluetun (ProtonVPN tunnel + killswitch for the torrent client)
+After=network-online.target
+# deluge lives inside this container's netns; keep it up for as long as the tunnel is up
+Upholds=deluge.service
+# a bad config must not hot-loop: 5 starts in 5 min, then stop and stay stopped
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Container]
+ContainerName=gluetun
+Image=docker.io/qmcgaw/gluetun:latest
+EnvironmentFile=${ARR_DIR}/config/gluetun.env
+AddCapability=NET_ADMIN
+AddDevice=/dev/net/tun
+Volume=${ARR_DIR}/config/gluetun:/gluetun
+Network=arr.network
+# deluge's WebUI is published HERE, because deluge joins this namespace.
+# Peer traffic arrives on the ProtonVPN *forwarded* port through tun0 — publishing
+# 6881 on the host would give peers a path to deluge that bypasses the tunnel.
+PublishPort=127.0.0.1:8112:8112
+PublishPort=${TAILNET_IP}:8112:8112
+
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

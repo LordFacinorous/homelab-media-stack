@@ -1,0 +1,15 @@
+{
+  "hasCompletedOnboarding": true,
+  "lastOnboardingVersion": "2.1.263",
+  "installMethod": "native",
+  "autoUpdates": false,
+  "numStartups": 1,
+  "projects": {
+    "/config": {
+      "allowedTools": [],
+      "hasTrustDialogAccepted": true,
+      "hasClaudeMdExternalIncludesApproved": true,
+      "hasClaudeMdExternalIncludesWarningShown": true
+    }
+  }
+}

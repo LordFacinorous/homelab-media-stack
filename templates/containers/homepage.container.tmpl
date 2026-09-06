@@ -1,0 +1,18 @@
+[Unit]
+Description=homepage (dashboard)
+After=network-online.target
+[Container]
+ContainerName=homepage
+Image=ghcr.io/gethomepage/homepage:latest
+UserNS=keep-id
+Environment=TZ=${TZ}
+Environment=HOMEPAGE_ALLOWED_HOSTS=${TAILNET_IP}:3000,127.0.0.1:3000,localhost:3000
+Volume=${ARR_DIR}/config/homepage:/app/config
+Network=arr.network
+PublishPort=127.0.0.1:3000:3000
+PublishPort=${TAILNET_IP}:3000:3000
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+[Install]
+WantedBy=default.target

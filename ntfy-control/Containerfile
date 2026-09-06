@@ -1,0 +1,21 @@
+# Sandbox that remote-repair Claude runs inside.
+#
+# It deliberately contains nothing that could reach the host: no podman client, no ssh,
+# no systemd. Its whole world is /config (the arr suite's configuration) plus whatever
+# it can reach over the arr bridge network.
+FROM docker.io/library/alpine:latest
+
+RUN apk add --no-cache nodejs npm git curl jq sqlite python3 ca-certificates \
+    && npm install -g @anthropic-ai/claude-code \
+    && npm cache clean --force \
+    && adduser -D -u 1000 repair
+
+# ~/.claude MUST exist and be owned by repair before runtime. If podman auto-creates it
+# while bind-mounting the credentials file into it, it lands root-owned 2755 and Claude
+# cannot write its session state. Verified: without this line, "~/.claude writable: NO".
+RUN mkdir -p /home/repair/.claude && chown -R repair:repair /home/repair
+
+ENV HOME=/home/repair
+WORKDIR /config
+USER repair
+ENTRYPOINT ["claude"]

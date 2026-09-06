@@ -1,0 +1,24 @@
+[Unit]
+Description=prowlarr (arr suite)
+RequiresMountsFor=${MEDIA_ROOT}
+After=network-online.target
+
+[Container]
+ContainerName=prowlarr
+Image=docker.io/linuxserver/prowlarr:latest
+UserNS=keep-id
+Environment=PUID=${PUID}
+Environment=PGID=${PGID}
+Environment=TZ=${TZ}
+Volume=${ARR_DIR}/config/prowlarr:/config
+Volume=${MEDIA_ROOT}:/data
+Network=arr.network
+PublishPort=127.0.0.1:9696:9696
+PublishPort=${TAILNET_IP}:9696:9696
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

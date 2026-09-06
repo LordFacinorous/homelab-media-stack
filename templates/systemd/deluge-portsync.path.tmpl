@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch gluetun's forwarded-port file
+
+[Path]
+# PathModified only. PathExists re-arms for as long as the file is there, which turned
+# into a start loop and tripped systemd's start limit within seconds of enabling.
+PathModified=${ARR_DIR}/config/gluetun/forwarded_port
+Unit=deluge-portsync.service
+
+[Install]
+WantedBy=default.target

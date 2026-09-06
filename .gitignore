@@ -1,0 +1,13 @@
+# The filled-in config. Holds a WireGuard private key, both ntfy topic names
+# (the topic name IS the credential — ntfy.sh anonymous accounts get 0 topic
+# reservations) and the repair token. Never commit this.
+stack.env
+
+# Rendered output from `deploy.sh --render`. Contains real paths and addresses.
+out/
+
+# Anything else that could carry a secret in.
+*.env
+!stack.env.example
+*.key
+*.pem
