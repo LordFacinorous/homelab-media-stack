@@ -1,0 +1,11 @@
+[Unit]
+Description=De-duplicate Live TV recordings and sort shows from movies
+After=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+ExecStart=${ARR_DIR}/recordings-tidy.sh --apply
+Nice=10
+IOSchedulingClass=idle

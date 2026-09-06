@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""
+Tidy Jellyfin Live TV recordings: de-duplicate, sort shows from movies, and report
+how much of each series has actually been captured.
+
+Why this exists: Jellyfin's own `SkipEpisodesInLibrary` cannot work for these. Pluto's
+EPG supplies an episode TITLE but no season/episode numbers, so recordings are named
+`Series YYYY_MM_DD_HH_MM_SS - Episode Title.ts` and Jellyfin can match none of it
+against TVDB. Left alone it re-records the same episodes forever - three duplicates
+appeared within two hours of the first run.
+
+  ./recordings-tidy.sh              report only, changes nothing (default)
+  ./recordings-tidy.sh --apply      actually move and delete
+  ./recordings-tidy.sh --apply --no-sort   dedupe only, leave the layout alone
+
+Series/episode identification uses TVmaze (free, no API key). Lookups are cached in
+.tvmaze-cache.json so repeated runs do not hammer it.
+"""
+import json
+import os
+import re
+import shutil
+import sys
+import urllib.parse
+import urllib.request
+
+ROOT = os.environ.get("RECORDINGS_ROOT", "${MEDIA_ROOT}/recordings")
+CACHE = os.path.join(ROOT, ".tvmaze-cache.json")
+APPLY = "--apply" in sys.argv
+SORT = "--no-sort" not in sys.argv
+
+# Jellyfin writes `Series 2026_09_06_02_00_00 - Title.ts`, sometimes with a ` - N`
+# suffix when it records the same programme again. That suffix is the duplicate marker.
+NAME = re.compile(
+    r"^(?P<series>.+?)\s+\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}\s*-\s*"
+    r"(?P<title>.+?)(?:\s*-\s*\d+)?$"
+)
+VIDEO = (".ts", ".mkv", ".mp4")
+
+
+def norm(t):
+    """Match titles across sources. Pluto says 'Measure of a Man', TVmaze says
+    'The Measure of a Man'; without this, coverage silently undercounts and a
+    finished series never reports as complete."""
+    t = t.lower().strip()
+    t = re.sub(r"^(the|a|an)\s+", "", t)
+    t = re.sub(r",?\s*part\s+([ivx\d]+)$", r" part \1", t)
+    t = re.sub(r"[^a-z0-9 ]+", "", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+cache = {}
+if os.path.exists(CACHE):
+    try:
+        cache = json.load(open(CACHE))
+    except Exception:
+        cache = {}
+
+
+def tvmaze(series):
+    """Return {'name','status','episodes':[titles]} or None if TVmaze knows no such show."""
+    if series in cache:
+        return cache[series]
+    q = urllib.parse.quote(re.sub(r"\s+", " ", series).strip())
+    url = f"https://api.tvmaze.com/singlesearch/shows?q={q}&embed=episodes"
+    try:
+        with urllib.request.urlopen(url, timeout=25) as r:
+            d = json.loads(r.read())
+        info = {
+            "name": d.get("name"),
+            "status": d.get("status"),
+            "episodes": [e["name"] for e in d.get("_embedded", {}).get("episodes", [])],
+        }
+    except Exception:
+        info = None
+    cache[series] = info
+    return info
+
+
+def sidecars(path):
+    """The .nfo / -thumb.jpg files Jellyfin writes next to a recording."""
+    base = os.path.splitext(path)[0]
+    d, stem = os.path.dirname(base), os.path.basename(base)
+    return [os.path.join(d, f) for f in os.listdir(d)
+            if f.startswith(stem) and not f.endswith(VIDEO)]
+
+
+# ---- collect ---------------------------------------------------------------
+found = []
+for dirpath, _, files in os.walk(ROOT):
+    for f in files:
+        if not f.endswith(VIDEO):
+            continue
+        m = NAME.match(os.path.splitext(f)[0])
+        if not m:
+            print(f"  unparsed, left alone: {f}")
+            continue
+        found.append({
+            "path": os.path.join(dirpath, f),
+            "series": m["series"].strip(),
+            "title": m["title"].strip(),
+            "size": os.path.getsize(os.path.join(dirpath, f)),
+        })
+
+if not found:
+    print("no recordings found")
+    sys.exit(0)
+
+print(f"{'PLAN' if not APPLY else 'APPLYING'} - {len(found)} recordings under {ROOT}\n")
+
+# ---- classify --------------------------------------------------------------
+series_names = sorted({r["series"] for r in found})
+shows, movies = {}, []
+for s in series_names:
+    info = tvmaze(s)
+    titles = {norm(t) for t in (info or {}).get("episodes", [])}
+    mine = [r for r in found if r["series"] == s]
+    # It is a series if TVmaze knows it AND at least one recorded title is a real
+    # episode of it. Otherwise the "series" is really a channel name and these are films.
+    if info and titles and any(norm(r["title"]) in titles for r in mine):
+        shows[s] = info
+    else:
+        movies.extend(mine)
+
+# ---- de-duplicate ----------------------------------------------------------
+groups = {}
+for r in found:
+    groups.setdefault((r["series"], norm(r["title"])), []).append(r)
+
+removed = freed = 0
+for (s, t), items in sorted(groups.items()):
+    if len(items) < 2:
+        continue
+    # Keep the largest: a re-record that was cut short is the smaller file.
+    items.sort(key=lambda x: x["size"], reverse=True)
+    keep, drop = items[0], items[1:]
+    print(f"  duplicate: {s} - {items[0]['title']}  ({len(items)} copies, keeping "
+          f"{keep['size']/1048576:.0f}MB)")
+    for d in drop:
+        freed += d["size"]
+        removed += 1
+        if APPLY:
+            for sc in sidecars(d["path"]):
+                os.remove(sc)
+            os.remove(d["path"])
+
+# ---- sort shows from movies ------------------------------------------------
+moved = 0
+if SORT:
+    for r in found:
+        if not os.path.exists(r["path"]):
+            continue          # removed as a duplicate above
+        kind = "Shows" if r["series"] in shows else "Movies"
+        sub = shows[r["series"]]["name"] if kind == "Shows" else ""
+        dest_dir = os.path.join(ROOT, kind, sub) if sub else os.path.join(ROOT, kind)
+        if os.path.dirname(r["path"]) == dest_dir:
+            continue
+        moved += 1
+        if APPLY:
+            os.makedirs(dest_dir, exist_ok=True)
+            for f in [r["path"]] + sidecars(r["path"]):
+                shutil.move(f, os.path.join(dest_dir, os.path.basename(f)))
+
+# ---- series-level metadata travels with the series -------------------------
+# Jellyfin writes tvshow.nfo and series artwork at the series-folder level. These do
+# not carry a recording's filename stem, so the per-recording sidecar matcher misses
+# them and they get orphaned in the old directory.
+SERIES_META = ("tvshow.nfo", "folder.jpg", "poster.jpg", "banner.jpg", "fanart.jpg")
+if SORT:
+    for s_name, info in shows.items():
+        old = os.path.join(ROOT, s_name)
+        new = os.path.join(ROOT, "Shows", info["name"])
+        if not os.path.isdir(old) or old == new:
+            continue
+        for f in os.listdir(old):
+            if f.lower() in SERIES_META:
+                moved += 1
+                if APPLY:
+                    os.makedirs(new, exist_ok=True)
+                    shutil.move(os.path.join(old, f), os.path.join(new, f))
+
+# ---- prune the directories the moves emptied -------------------------------
+pruned = 0
+for dirpath, dirnames, files in os.walk(ROOT, topdown=False):
+    if dirpath == ROOT or os.path.basename(dirpath) in ("Shows", "Movies"):
+        continue
+    if not os.listdir(dirpath):
+        pruned += 1
+        if APPLY:
+            os.rmdir(dirpath)
+
+# ---- coverage --------------------------------------------------------------
+print("\n  series coverage:")
+for s, info in sorted(shows.items()):
+    have = {norm(r["title"]) for r in found if r["series"] == s}
+    total = len(info["episodes"])
+    got = len(have & {norm(t) for t in info["episodes"]})
+    pct = 100 * got // total if total else 0
+    flag = "  ** COMPLETE - safe to delete this series timer **" if total and got >= total else ""
+    print(f"    {info['name']:<34} {got:>4}/{total:<4} ({pct:>3}%)  [{info['status']}]{flag}")
+if movies:
+    print(f"\n  classified as films (not a TVmaze series): {len({m['title'] for m in movies})}")
+    for m in sorted({m["title"] for m in movies})[:6]:
+        print(f"    {m}")
+
+print(f"\n  duplicates {'removed' if APPLY else 'to remove'}: {removed}"
+      f"  ({freed/1048576:.0f} MB)")
+print(f"  files {'moved' if APPLY else 'to move'}: {moved}")
+print(f"  empty dirs {'pruned' if APPLY else 'to prune'}: {pruned}")
+if not APPLY:
+    print("\n  nothing changed. re-run with --apply to do it.")
+
+try:
+    json.dump(cache, open(CACHE, "w"))
+except Exception:
+    pass

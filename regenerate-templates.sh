@@ -43,7 +43,8 @@ echo "  quadlets templated: $n"
 u=0
 for f in deluge-portsync.service deluge-portsync.path livetv-guide.service livetv-guide.timer \
          ntfy-control.service prime-backup.service prime-backup.timer \
-         recyclarr-sync.service recyclarr-sync.timer; do
+         recyclarr-sync.service recyclarr-sync.timer \
+         recordings-tidy.service recordings-tidy.timer; do
   [ -e "$SRC_U/$f" ] || continue
   render "$SRC_U/$f" > "$DST/systemd/$f.tmpl"
   u=$((u+1))

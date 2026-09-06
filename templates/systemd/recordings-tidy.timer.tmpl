@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Live TV recording tidy
+
+[Timer]
+# After the guide rebuild (05:20) so it works on a settled set.
+OnCalendar=*-*-* 06:10:00
+RandomizedDelaySec=20m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
