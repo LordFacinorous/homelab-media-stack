@@ -50,6 +50,15 @@ fi
 [ "$(id -u)" = "$PUID" ] && ok "PUID matches the running user" \
                          || warn "PUID=$PUID but you are $(id -u) - containers may write unreadable files"
 
+# Where each rendered script belongs. The guard and the installer both use this, so a
+# unit's ExecStart and the file's install location cannot drift apart.
+script_dest() {
+  case "$1" in
+    backup.sh) echo "$STACK_HOME/services/backup" ;;
+    *)         echo "$ARR_DIR" ;;
+  esac
+}
+
 render_all() {
   local dest="$1"
   mkdir -p "$dest/containers" "$dest/systemd" "$dest/scripts"
@@ -95,6 +104,41 @@ case "$MODE" in
     [ -e "$live" ] || { warn "no live counterpart: $b"; continue; }
     diff -q "$f" "$live" >/dev/null || { echo "  DIFFERS: $b"; diff "$live" "$f" | head -6; fail=1; }
   done
+  # ---- ExecStart guard --------------------------------------------------
+  # Every unit's ExecStart must point at a real SYSTEM binary or at something the
+  # deployer installs. Twice now a unit shipped referencing a file that was never
+  # installed (ntfy control.py, then backfill.py); the round-trip diff cannot catch
+  # that because both sides agree the file is simply absent.
+  #
+  # Only /usr, /bin and /sbin count as "system" - a path under $HOME existing on THIS
+  # host proves nothing about a fresh machine, which is the whole point of the check.
+  echo "== ExecStart guard: do units point at files the deployer installs? =="
+  guard_out=$(mktemp)
+  for f in "$T"/systemd/*; do
+    [ -e "$f" ] || continue
+    while IFS= read -r line; do
+      for tok in $line; do
+        case "$tok" in
+          /usr/*|/bin/*|/sbin/*) [ -x "$tok" ] || echo "  MISSING BIN $(basename "$f"): $tok" >> "$guard_out"; continue ;;
+          /*) : ;;
+          *) continue ;;
+        esac
+        base=$(basename "$tok"); dir=$(dirname "$tok")
+        # ntfy-control ships its own sources verbatim (not templated) into NTFY_DIR
+        if [ -e "$HERE/ntfy-control/$base" ] && [ "$dir" = "$NTFY_DIR" ]; then
+          continue
+        fi
+        if [ ! -e "$T/scripts/$base" ]; then
+          echo "  NOT SHIPPED $(basename "$f"): $tok is never installed by deploy.sh" >> "$guard_out"
+        elif [ "$dir" != "$(script_dest "$base")" ]; then
+          echo "  MISPLACED   $(basename "$f"): wants $tok but it installs to $(script_dest "$base")" >> "$guard_out"
+        fi
+      done
+    done < <(grep -h '^ExecStart=' "$f" 2>/dev/null | sed 's/^ExecStart=//')
+  done
+  if [ -s "$guard_out" ]; then cat "$guard_out"; fail=1; else echo "  all ExecStart paths resolve"; fi
+  rm -f "$guard_out"
+
   [ $fail -eq 0 ] && echo "== round trip is lossless: templates reproduce the live stack exactly ==" \
                   || { echo "== templates do NOT reproduce the live stack (above) =="; exit 1; }
   ;;
@@ -115,8 +159,20 @@ case "$MODE" in
   render_all "$T"
   cp "$T"/containers/* "$HOME/.config/containers/systemd/"
   cp "$T"/systemd/*    "$HOME/.config/systemd/user/"
-  cp "$T"/scripts/*    "$ARR_DIR/" 2>/dev/null || true
-  ok "units and scripts"
+  for f in "$T"/scripts/*; do
+    [ -e "$f" ] || continue
+    d=$(script_dest "$(basename "$f")"); mkdir -p "$d"
+    cp "$f" "$d/" && chmod +x "$d/$(basename "$f")"
+  done
+  # the ntfy control channel's own program, referenced by ntfy-control.service
+  mkdir -p "$NTFY_DIR/seed"
+  cp "$HERE"/ntfy-control/control.py "$HERE"/ntfy-control/claude-contained.sh \
+     "$HERE"/ntfy-control/Containerfile "$NTFY_DIR/" 2>/dev/null || true
+  cp "$HERE"/ntfy-control/seed/settings.json "$NTFY_DIR/seed/" 2>/dev/null || true
+  [ -e "$NTFY_DIR/seed/claude.json" ] || cp "$HERE"/ntfy-control/seed/claude.json.example \
+     "$NTFY_DIR/seed/claude.json" 2>/dev/null || true
+  chmod +x "$NTFY_DIR/claude-contained.sh" 2>/dev/null || true
+  ok "units, scripts and ntfy-control sources"
 
   echo "== writing gluetun.env =="
   cat > "$ARR_DIR/config/gluetun.env" <<EOF
