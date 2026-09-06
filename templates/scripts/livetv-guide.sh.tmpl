@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Jellyfin's Live TV channel list and matching EPG.
+# Build Jellyfin's Live TV channel list and matching EPG, nightly.
 #
 # Why this exists: iptv-org publishes channels but NO prebuilt guide - its guides.json
 # is a catalogue of scrapeable sites with no urls, and running their grabber is a whole
@@ -7,7 +7,10 @@
 # internal channel ids. The iptv-org playlist embeds those same ids in its stream URLs
 # (jmp2.uk/plu-<id>.m3u8), so the two can be joined by rewriting tvg-id.
 #
-# Result: every Pluto channel gets real guide data; the rest still play, just without it.
+# It also prunes: numbered duplicate feeds, out-of-market local affiliates, channels
+# flagged Not 24/7, and - the one that matters - anything whose stream does not actually
+# respond. The upstream list rots continuously, so without the liveness pass dead
+# channels creep straight back in on every rebuild.
 set -uo pipefail
 
 JF=${ARR_DIR}/config/jellyfin
@@ -17,23 +20,32 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 LOG() { printf '%s %s\n' "$(date -Is)" "$*"; }
 
-curl -sfL -m 180 "$SRC" -o "$WORK/us.m3u" || { LOG "playlist download failed"; exit 1; }
-curl -sfL -m 180 "$EPG" -o "$WORK/epg.xml.gz" || { LOG "epg download failed"; exit 1; }
-gunzip -f "$WORK/epg.xml.gz" || { LOG "epg was not gzip"; exit 1; }
+curl -sfL -m 180 "$SRC" -o "$WORK/us.m3u" || { LOG "playlist download failed, keeping previous"; exit 1; }
+curl -sfL -m 180 "$EPG" -o "$WORK/epg.xml.gz" || { LOG "epg download failed, keeping previous"; exit 1; }
+gunzip -f "$WORK/epg.xml.gz" || { LOG "epg was not gzip, keeping previous"; exit 1; }
 
 [ -s "$WORK/us.m3u" ] && [ -s "$WORK/epg.xml" ] || { LOG "empty download, keeping previous"; exit 1; }
 
 python3 - "$WORK" "$JF" <<'PY'
-import re, sys, collections
+import collections
+import concurrent.futures
+import re
+import sys
+import time
+import urllib.request
+
 work, jf = sys.argv[1], sys.argv[2]
 
 WANT = {"news", "movies", "classic", "kids"}
 # Anime by name rather than by the Animation category: that category is mostly
-# kids programming (3ABN Kids, Mr. Bean, Nickelodeon) which is not wanted here.
+# kids programming (3ABN Kids, Mr. Bean, Nickelodeon), already covered by "kids".
 ANIME = r"\b(anime|toonami|crunchyroll|hidive|naruto|one piece|midnight pulp)\b"
+SPORT = r"\b(NHL|hockey)\b"
+
 lines = open(f"{work}/us.m3u", encoding="utf-8").read().splitlines()
 
-kept, seen = [], set()
+# ---- 1. category filter ----------------------------------------------------
+cands, seen = [], set()
 i = 0
 while i < len(lines):
     if not lines[i].startswith("#EXTINF"):
@@ -46,31 +58,87 @@ while i < len(lines):
     name = ext.split(",", 1)[1].strip() if "," in ext else ""
     gm = re.search(r'group-title="([^"]*)"', ext)
     groups = {g.strip().lower() for g in gm.group(1).split(";")} if gm else set()
-    if not (groups & WANT
-            or re.search(r"\b(NHL|hockey)\b", name, re.I)
-            or re.search(ANIME, name, re.I)):
+    if not (groups & WANT or re.search(SPORT, name, re.I) or re.search(ANIME, name, re.I)):
         continue
     seen.add(url)
-    # Join to the guide: Pluto's own channel id is inside the stream URL.
-    plu = re.search(r"/plu-([0-9a-f]{16,})", url)
-    if plu:
-        ext = re.sub(r'tvg-id="[^"]*"', f'tvg-id="{plu.group(1)}"', ext)
-    kept.append((name, ext, url))
+    cands.append({"name": name, "ext": ext, "url": url})
+print(f"  after category filter: {len(cands)}")
 
-kept.sort(key=lambda x: x[0].lower())
+# ---- 2. structural prune ---------------------------------------------------
+# Numbered sibling feeds (ABC News Live 1..10) are one channel listed ten times.
+fams = collections.defaultdict(list)
+for c in cands:
+    stripped = re.sub(r"\s*\(\d+p\)", "", c["name"]).strip()
+    m = re.match(r"^(?P<b>.+?)\s+(?P<n>\d{1,2})$", stripped)
+    if m:
+        fams[m["b"].strip()].append((int(m["n"]), c["name"]))
+dupes = {nm for v in fams.values() if len(v) > 1 for _, nm in sorted(v)[1:]}
+
+# Local broadcast callsigns: unwatchable outside their own market.
+AFFILIATE = r"\([KW][A-Z]{2,3}(-[A-Z]{2,3})?\)|\b[KW][A-Z]{2,3}-(DT|TV)\d?\b"
+drop = set(dupes)
+for c in cands:
+    if re.search(AFFILIATE, c["name"]) or "Not 24/7" in c["name"]:
+        drop.add(c["name"])
+cands = [c for c in cands if c["name"] not in drop]
+print(f"  after structural prune: {len(cands)}  (dropped {len(drop)}: {len(dupes)} "
+      f"duplicate feeds, {len(drop) - len(dupes)} affiliate/intermittent)")
+
+# ---- 3. liveness -----------------------------------------------------------
+# Two attempts. One failed probe is not evidence: four News12 feeds failed the first
+# and passed the second. Condemning a channel on a single timeout is how you delete
+# working things.
+def probe(c, timeout=12):
+    req = urllib.request.Request(c["url"], headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            b = r.read(2048)
+            return r.status == 200 and (b"#EXT" in b or len(b) > 200)
+    except Exception:
+        return False
+
+alive, todo = set(), list(cands)
+for attempt in (1, 2):
+    if not todo:
+        break
+    with concurrent.futures.ThreadPoolExecutor(max_workers=24) as ex:
+        for c, ok in zip(todo, ex.map(probe, todo)):
+            if ok:
+                alive.add(c["name"])
+    todo = [c for c in todo if c["name"] not in alive]
+    if todo and attempt == 1:
+        time.sleep(5)
+
+# Safety valve: if most of the list looks dead, the fault is far more likely to be
+# this host's network than 200 broadcasters failing simultaneously. Keep what we have.
+if cands and len(alive) < 0.6 * len(cands):
+    print(f"  ABORT: only {len(alive)}/{len(cands)} responded - assuming a local network "
+          f"fault rather than mass channel death. Previous playlist kept.")
+    sys.exit(1)
+
+dead = len(cands) - len(alive)
+cands = [c for c in cands if c["name"] in alive]
+print(f"  after liveness: {len(cands)}  (dropped {dead} dead)")
+
+# ---- 4. join to the guide and write ----------------------------------------
+cands.sort(key=lambda c: c["name"].lower())
+guided = 0
 with open(f"{jf}/curated-us.m3u", "w", encoding="utf-8") as f:
     f.write("#EXTM3U\n")
-    for _, ext, url in kept:
-        f.write(ext + "\n" + url + "\n")
+    for c in cands:
+        ext = c["ext"]
+        plu = re.search(r"/plu-([0-9a-f]{16,})", c["url"])
+        if plu:
+            ext = re.sub(r'tvg-id="[^"]*"', f'tvg-id="{plu.group(1)}"', ext)
+            guided += 1
+        f.write(ext + "\n" + c["url"] + "\n")
 
-# Trim the EPG to channels actually in the playlist, so Jellyfin is not parsing
-# hundreds of guides for channels it will never show.
-ids = {m.group(1) for _, e, _ in kept if (m := re.search(r'tvg-id="([0-9a-f]{16,})"', e))}
 epg = open(f"{work}/epg.xml", encoding="utf-8").read()
-chan = len(re.findall(r"<channel id=", epg))
-with open(f"{jf}/pluto-epg.xml", "w", encoding="utf-8") as f:
-    f.write(epg)
-print(f"  channels kept: {len(kept)}  with guide ids: {len(ids)}  epg channels: {chan}")
+open(f"{jf}/pluto-epg.xml", "w", encoding="utf-8").write(epg)
+print(f"  wrote {len(cands)} channels, {guided} with guide ids, "
+      f"{len(re.findall(r'<channel id=', epg))} channels in the epg")
 PY
+rc=$?
+[ $rc -eq 0 ] || { LOG "python stage failed (rc=$rc) - previous playlist left in place"; exit $rc; }
 
 LOG "playlist -> $JF/curated-us.m3u ; guide -> $JF/pluto-epg.xml"
