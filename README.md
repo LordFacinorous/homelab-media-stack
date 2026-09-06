@@ -19,6 +19,18 @@ cost an afternoon rather than a weekend.
 | `wire.sh` | post-start API wiring. Idempotent, `--dry-run` supported. |
 | `templates/` | 20 quadlets + 9 systemd units + 3 scripts, generated not hand-written |
 
+## What it needs
+
+| | |
+|---|---|
+| podman | 4.9+ (tested on 4.9.3 and 5.4.2) |
+| disk for images | **~20 GB.** 9.4 GB of that is the whisper ASR image alone — delete `templates/containers/whisper.container.tmpl` if you do not want generated subtitles and the requirement drops to ~9 GB. |
+| `/dev/dri` | only for Jellyfin hardware transcoding. Without a render node podman refuses to start the container outright; delete the `AddDevice=/dev/dri` line to run software transcoding. |
+| downloads + media | must be **one filesystem**, or the arr apps copy instead of hardlinking. `deploy.sh` refuses to continue otherwise. |
+| tailscale | for the admin UIs, which bind to the tailnet address and loopback only. |
+
+`deploy.sh --check` verifies all of these before it touches anything.
+
 ## Rebuild on a fresh machine
 
 ```bash

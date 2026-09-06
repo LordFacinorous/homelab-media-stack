@@ -50,6 +50,40 @@ fi
 [ "$(id -u)" = "$PUID" ] && ok "PUID matches the running user" \
                          || warn "PUID=$PUID but you are $(id -u) - containers may write unreadable files"
 
+# jellyfin.container passes /dev/dri through for VAAPI hardware transcoding. On a host
+# with no render node podman refuses to start it at all ("stat /dev/dri: no such file or
+# directory") - it does not quietly fall back to software. Say so here rather than let it
+# look like a jellyfin fault.
+# Container images for the full stack are about 18 GB, and 9.4 GB of that is the whisper
+# ASR image alone. Running out mid-pull leaves a half-installed stack whose failures look
+# like anything but a full disk, so check before starting rather than after.
+graphroot="${HOME}/.local/share/containers"
+mkdir -p "$graphroot"
+free_g=$(df -BG --output=avail "$graphroot" 2>/dev/null | tail -1 | tr -dc '0-9')
+if [ -n "$free_g" ]; then
+  if grep -q '^Image=' "$TPL/containers/whisper.container.tmpl" 2>/dev/null; then
+    need=20; hint="Delete templates/containers/whisper.container.tmpl to save 9.4G (subtitles only)."
+  else
+    need=10; hint="Free space or move \$HOME/.local/share/containers to a bigger disk."
+  fi
+  if [ "$free_g" -ge "$need" ]; then
+    ok "${free_g}G free for images (need ~${need}G)"
+  else
+    warn "only ${free_g}G free at $graphroot - the images need ~${need}G."
+    warn "      $hint"
+  fi
+fi
+
+jf_tmpl="$TPL/containers/jellyfin.container.tmpl"
+if ! grep -q '^AddDevice=/dev/dri' "$jf_tmpl" 2>/dev/null; then
+  ok "jellyfin configured for software transcoding (no /dev/dri passthrough)"
+elif [ -e /dev/dri ]; then
+  ok "/dev/dri present (jellyfin hardware transcoding)"
+else
+  warn "no /dev/dri - jellyfin will NOT start. Delete the AddDevice=/dev/dri line from"
+  warn "      $jf_tmpl to run software transcoding."
+fi
+
 # Where each rendered script belongs. The guard and the installer both use this, so a
 # unit's ExecStart and the file's install location cannot drift apart.
 script_dest() {
@@ -83,14 +117,17 @@ case "$MODE" in
   T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
   render_all "$T"
   fail=0
+  compared=0   # how many rendered files actually had a live file to diff against
   for f in "$T"/containers/*; do
     live="$HOME/.config/containers/systemd/$(basename "$f")"
     [ -e "$live" ] || { warn "no live counterpart: $(basename "$f")"; continue; }
+    compared=$((compared+1))
     diff -q "$f" "$live" >/dev/null || { echo "  DIFFERS: $(basename "$f")"; diff "$live" "$f" | head -6; fail=1; }
   done
   for f in "$T"/systemd/*; do
     live="$HOME/.config/systemd/user/$(basename "$f")"
     [ -e "$live" ] || { warn "no live counterpart: $(basename "$f")"; continue; }
+    compared=$((compared+1))
     diff -q "$f" "$live" >/dev/null || { echo "  DIFFERS: $(basename "$f")"; diff "$live" "$f" | head -6; fail=1; }
   done
   # Scripts were rendered but never compared - the drift check had a blind spot over
@@ -102,6 +139,7 @@ case "$MODE" in
     live="$ARR_DIR/$b"
     [ -e "$live" ] || live="$HOME/services/backup/$b"
     [ -e "$live" ] || { warn "no live counterpart: $b"; continue; }
+    compared=$((compared+1))
     diff -q "$f" "$live" >/dev/null || { echo "  DIFFERS: $b"; diff "$live" "$f" | head -6; fail=1; }
   done
   # ---- ExecStart guard --------------------------------------------------
@@ -139,8 +177,16 @@ case "$MODE" in
   if [ -s "$guard_out" ]; then cat "$guard_out"; fail=1; else echo "  all ExecStart paths resolve"; fi
   rm -f "$guard_out"
 
-  [ $fail -eq 0 ] && echo "== round trip is lossless: templates reproduce the live stack exactly ==" \
-                  || { echo "== templates do NOT reproduce the live stack (above) =="; exit 1; }
+  # On a machine with no stack installed there is nothing to diff against, and saying
+  # "reproduces the live stack exactly" there is a lie - it compared zero files.
+  if [ $fail -ne 0 ]; then
+    echo "== templates do NOT reproduce the live stack (above) =="; exit 1
+  elif [ $compared -eq 0 ]; then
+    echo "== nothing installed here yet: templates render and every ExecStart resolves,"
+    echo "   but there is no live stack to compare against. Run ./deploy.sh --install =="
+  else
+    echo "== round trip is lossless: $compared live files reproduced exactly =="
+  fi
   ;;
 
 --render)
@@ -157,6 +203,21 @@ case "$MODE" in
   echo "== rendering into place =="
   T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
   render_all "$T"
+
+  # Every Volume host path has to exist before podman starts. Podman does not create a
+  # bind-mount source; it fails with "statfs <path>: no such file or directory", the unit
+  # hits its restart limit in under a second, and every container in the stack dies the
+  # same way. Deriving the list from the rendered units rather than hard-coding it means
+  # a container added later cannot be forgotten here.
+  # Found 2026-09-06 on a clean Debian 13 VM - on the host this was written on the
+  # config directories already existed, so the omission was invisible.
+  vdirs=0
+  while IFS= read -r hostpath; do
+    case "$hostpath" in /*) ;; *) continue ;; esac
+    [ -d "$hostpath" ] || { mkdir -p "$hostpath" && vdirs=$((vdirs+1)); }
+  done < <(sed -n 's/^Volume=\([^:]*\):.*/\1/p' "$T"/containers/*.container | sort -u)
+  ok "bind-mount directories ($vdirs created)"
+
   cp "$T"/containers/* "$HOME/.config/containers/systemd/"
   cp "$T"/systemd/*    "$HOME/.config/systemd/user/"
   for f in "$T"/scripts/*; do
@@ -192,6 +253,27 @@ EOF
   chmod 600 "$ARR_DIR/config/gluetun.env"
   ok "gluetun.env (0600)"
 
+  # jellystat-db and jellystat share one EnvironmentFile. Without it BOTH units fail
+  # with "parsing file .../jellystat.env: no such file or directory" - and because the
+  # file existed on the host this was written on, that never showed up until a clean
+  # install (2026-09-06, Debian 13 VM).
+  # Written once and never rewritten: postgres bakes the password in at initdb time, so
+  # changing it later locks jellystat out of its own database.
+  if [ -e "$ARR_DIR/config/jellystat.env" ]; then
+    ok "jellystat.env already exists (left alone - the db password is baked into postgres)"
+  else
+    jpw="${JELLYSTAT_DB_PASSWORD:-}"; [ -n "$jpw" ] || jpw=$(head -c 18 /dev/urandom | base64)
+    jjwt="${JELLYSTAT_JWT_SECRET:-}"; [ -n "$jjwt" ] || jjwt=$(head -c 18 /dev/urandom | base64)
+    cat > "$ARR_DIR/config/jellystat.env" <<EOF
+POSTGRES_USER=jellystat
+POSTGRES_PASSWORD=${jpw}
+POSTGRES_DB=jfstat
+JWT_SECRET=${jjwt}
+EOF
+    chmod 600 "$ARR_DIR/config/jellystat.env"
+    ok "jellystat.env (0600, generated)"
+  fi
+
   echo "== ntfy control config =="
   mkdir -p "$NTFY_DIR"
   printf 'CMD_TOPIC=%s\nFIX_TOKEN=%s\n' "$NTFY_CMD_TOPIC" "$FIX_TOKEN" > "$NTFY_DIR/config.env"
@@ -200,14 +282,43 @@ EOF
   chmod 600 "$ARR_DIR/ntfy-topic.txt"
   ok "ntfy topics (0600)"
 
-  echo "== starting, in dependency order =="
   systemctl --user daemon-reload
+
+  # Pull before starting. A unit still pulling a multi-gigabyte image runs past
+  # TimeoutStartSec and is reported as "failed to start" when nothing is actually wrong,
+  # which sends you debugging a non-problem on every fresh install. This is the slow
+  # step - roughly 6 GB the first time.
+  echo "== pulling images (first install: this is the slow part) =="
+  while IFS= read -r img; do
+    [ -n "$img" ] || continue
+    podman image exists "$img" 2>/dev/null && continue
+    printf '  %-46s ' "$img"
+    perr=$(mktemp)
+    if podman pull -q "$img" >/dev/null 2>"$perr"; then
+      echo ok
+    else
+      # Say why. "FAILED" alone sends you looking in the wrong place - the usual cause
+      # is a full disk, not a bad image reference.
+      echo "FAILED - $(tail -1 "$perr" | cut -c1-90)"
+    fi
+    rm -f "$perr"
+  done < <(sed -n 's/^Image=//p' "$T"/containers/*.container | sort -u)
+
+  echo "== starting, in dependency order =="
+  failed=""
   # gluetun first: deluge lives in its network namespace and cannot start without it.
   for u in gluetun deluge sonarr radarr lidarr prowlarr bazarr sabnzbd jellyfin \
            jellyseerr flaresolverr autobrr homepage uptime-kuma jellystat-db jellystat \
            whisper unpackerr; do
     [ -e "$HOME/.config/containers/systemd/$u.container" ] || continue
-    systemctl --user start "$u.service" 2>/dev/null && ok "started $u" || warn "failed to start $u"
+    if systemctl --user start "$u.service" 2>/dev/null; then
+      ok "started $u"
+    else
+      # Say WHY. Swallowing the reason is what makes a fresh install feel unfixable.
+      warn "failed to start $u: $(journalctl --user -u "$u.service" -n 20 --no-pager -o cat 2>/dev/null |
+              grep -iE 'error|cannot|no such|denied|refused' | tail -1 | cut -c1-100)"
+      failed="$failed $u"
+    fi
     [ "$u" = gluetun ] && sleep 20   # let the tunnel come up before deluge joins it
   done
   # Enable every timer/helper that has a template, rather than a hand-kept list that
@@ -221,6 +332,14 @@ EOF
   ok "timers and helpers"
 
   echo
+  if [ -n "$failed" ]; then
+    # Reporting "containers are up" while half of them are dead is how an install looks
+    # fine and behaves broken.
+    echo "These did NOT start:$failed"
+    echo "  systemctl --user status <name>      journalctl --user -u <name> -n 40"
+    echo "Fix them before ./wire.sh - it reads each app's API key from a running app."
+    exit 1
+  fi
   echo "Containers are up but NOT wired together yet - each app generates its own"
   echo "API key on first start. Give them a minute, then run:  ./wire.sh"
   ;;
