@@ -54,17 +54,54 @@ minutes and is free.
 
 4. **Google Auth Platform → Clients** → Create client → Application type **Desktop app**.
    (This is the old "APIs & Services → Credentials → OAuth client ID"; it now lives under
-   Clients in the Auth Platform's left nav.) Copy the client ID and client secret.
+   Clients in the Auth Platform's left nav.) **Download JSON** on the confirmation dialog —
+   the client secret is shown once and never again, and the JSON is the easiest way to get
+   both values onto the host without retyping them.
+
+4a. **Two things the wizard does NOT finish**, both of which block the consent screen and
+   neither of which is obvious (found 2026-09-06 after the wizard reported success):
+
+   - **Audience → Test users → Add users → your own Google address.** In Testing mode
+     only listed test users may authorise, and *the project owner is not automatically
+     one*. With an empty list, consent fails with `access_denied` and the error does not
+     mention test users. The Create-client dialog says this in passing: "OAuth access is
+     restricted to the test users listed on your OAuth consent screen."
+   - **Branding.** The Audience page shows "Your app's OAuth configuration is incomplete.
+     You must enter the missing information to proceed. Please visit the Branding page to
+     finish configuring your app." Fill in whatever Branding flags as missing. The banner
+     carries a **Go to Branding** button.
+
+   Check both before running the auth, or you will debug a consent failure that has
+   nothing to do with rclone.
 5. On PRIME:
 
+   The interactive `rclone config` walk is optional - the two values can be written
+   straight into the remote, which is what was done here:
+
    ```
-   rclone config
-     e) Edit existing remote  ->  gdrive
-     client_id     <paste>
-     client_secret <paste>
-     ... accept the rest unchanged ...
-     y) Yes, edit this remote  ->  it will re-run the browser auth
+   # from the downloaded client_secret_*.json, without echoing the secret
+   python3 - ~/Downloads/client_secret_*.json ~/.config/rclone/rclone.conf <<'EOF'
+   import json, sys, configparser
+   d = json.load(open(sys.argv[1])); inst = d.get("installed") or d.get("web")
+   cp = configparser.RawConfigParser(); cp.optionxform = str; cp.read(sys.argv[2])
+   cp["gdrive"]["client_id"] = inst["client_id"]
+   cp["gdrive"]["client_secret"] = inst["client_secret"]
+   cp.write(open(sys.argv[2], "w"), space_around_delimiters=True)
+   EOF
+   chmod 600 ~/.config/rclone/rclone.conf
    ```
+
+   The existing token was issued to rclone's shared client and stays bound to it, so the
+   new client_id changes nothing until the remote is re-authorised:
+
+   ```
+   rclone config reconnect gdrive: --auto-confirm
+   ```
+
+   That prints a `http://127.0.0.1:53682/auth?state=...` link and waits. Open it, pick the
+   Google account, and approve. Expect an "unverified app" interstitial - that is normal
+   for an app in Testing; click Advanced -> Go to <app name> (unsafe). It is your own
+   client asking for access to your own Drive.
 
 6. Prove it took, and that the credential is not empty:
 
