@@ -29,13 +29,32 @@ minutes and is free.
 
 1. https://console.cloud.google.com/ → create a project (any name).
 2. APIs & Services → Library → **Google Drive API** → Enable.
-3. APIs & Services → OAuth consent screen → **External** → fill in app name and your own
-   email → Save. Leave it in **Testing** and add your own Google account under
-   **Test users**. (Testing mode refresh tokens expire after 7 days *only* for apps that
-   never got verified AND use sensitive scopes; `drive.file`, which this remote uses, is
-   not sensitive, so the token persists. If you ever widen the scope, publish the app.)
-4. APIs & Services → Credentials → Create credentials → **OAuth client ID** →
-   Application type **Desktop app**. Copy the client ID and client secret.
+3. **Google Auth Platform** → **Get started**.
+
+   Google replaced the old "APIs & Services → OAuth consent screen" page with the
+   **Google Auth Platform**, and there is no longer an External/Internal choice sitting
+   on a page of its own. It is step 2 of a four-step wizard that only appears after you
+   click **Get started**, so on a fresh project the console shows "Google Auth Platform
+   not configured yet" and nothing else — verified on screen 2026-09-06.
+
+   The wizard, in order:
+
+   1. **App Information** — App name, User support email (your own address, offered in a
+      dropdown) → Next
+   2. **Audience** — **← "External" is HERE.** Two radio buttons, Internal and External.
+   3. **Contact Information** — an email address for Google to notify about the project.
+   4. **Finish** — tick *I agree to the Google API Services: User Data Policy* → Continue
+      → **Create**.
+
+   Leave the app in **Testing** and add your own Google account under **Test users**
+   (Audience → Test users, after the wizard). Testing-mode refresh tokens expire after 7
+   days *only* for apps that never got verified AND use sensitive scopes; `drive.file`,
+   which this remote uses, is not sensitive, so the token persists. If you ever widen the
+   scope, publish the app.
+
+4. **Google Auth Platform → Clients** → Create client → Application type **Desktop app**.
+   (This is the old "APIs & Services → Credentials → OAuth client ID"; it now lives under
+   Clients in the Auth Platform's left nav.) Copy the client ID and client secret.
 5. On PRIME:
 
    ```
