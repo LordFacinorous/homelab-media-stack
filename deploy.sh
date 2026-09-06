@@ -84,6 +84,17 @@ case "$MODE" in
     [ -e "$live" ] || { warn "no live counterpart: $(basename "$f")"; continue; }
     diff -q "$f" "$live" >/dev/null || { echo "  DIFFERS: $(basename "$f")"; diff "$live" "$f" | head -6; fail=1; }
   done
+  # Scripts were rendered but never compared - the drift check had a blind spot over
+  # exactly the files that change most often. Found 2026-09-06 when livetv-guide.sh had
+  # drifted and --check still reported "lossless".
+  for f in "$T"/scripts/*; do
+    [ -e "$f" ] || continue
+    b=$(basename "$f")
+    live="$ARR_DIR/$b"
+    [ -e "$live" ] || live="$HOME/services/backup/$b"
+    [ -e "$live" ] || { warn "no live counterpart: $b"; continue; }
+    diff -q "$f" "$live" >/dev/null || { echo "  DIFFERS: $b"; diff "$live" "$f" | head -6; fail=1; }
+  done
   [ $fail -eq 0 ] && echo "== round trip is lossless: templates reproduce the live stack exactly ==" \
                   || { echo "== templates do NOT reproduce the live stack (above) =="; exit 1; }
   ;;
@@ -143,8 +154,14 @@ EOF
     systemctl --user start "$u.service" 2>/dev/null && ok "started $u" || warn "failed to start $u"
     [ "$u" = gluetun ] && sleep 20   # let the tunnel come up before deluge joins it
   done
-  systemctl --user enable --now deluge-portsync.path livetv-guide.timer \
-            ntfy-control.service recyclarr-sync.timer 2>/dev/null
+  # Enable every timer/helper that has a template, rather than a hand-kept list that
+  # silently omits anything added later (recordings-tidy and prime-backup were missed
+  # exactly that way).
+  systemctl --user enable --now deluge-portsync.path ntfy-control.service 2>/dev/null
+  for t in "$HOME"/.config/systemd/user/*.timer; do
+    [ -e "$t" ] || continue
+    systemctl --user enable --now "$(basename "$t")" 2>/dev/null && ok "timer $(basename "$t")"
+  done
   ok "timers and helpers"
 
   echo

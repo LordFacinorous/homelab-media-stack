@@ -15,12 +15,16 @@ set -uo pipefail
 
 JF=${ARR_DIR}/config/jellyfin
 SRC="https://iptv-org.github.io/iptv/countries/us.m3u"
+# Ambient/relaxation content is language-agnostic, so it is pulled globally rather
+# than from the US list - the US list carries only two such channels.
+RELAX="https://iptv-org.github.io/iptv/categories/relax.m3u"
 EPG="https://i.mjh.nz/PlutoTV/us.xml.gz"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 LOG() { printf '%s %s\n' "$(date -Is)" "$*"; }
 
 curl -sfL -m 180 "$SRC" -o "$WORK/us.m3u" || { LOG "playlist download failed, keeping previous"; exit 1; }
+curl -sfL -m 180 "$RELAX" -o "$WORK/relax.m3u" || : 
 curl -sfL -m 180 "$EPG" -o "$WORK/epg.xml.gz" || { LOG "epg download failed, keeping previous"; exit 1; }
 gunzip -f "$WORK/epg.xml.gz" || { LOG "epg was not gzip, keeping previous"; exit 1; }
 
@@ -36,13 +40,20 @@ import urllib.request
 
 work, jf = sys.argv[1], sys.argv[2]
 
-WANT = {"news", "movies", "classic", "kids"}
+WANT = {"news", "movies", "classic", "kids", "relax"}
 # Anime by name rather than by the Animation category: that category is mostly
 # kids programming (3ABN Kids, Mr. Bean, Nickelodeon), already covered by "kids".
 ANIME = r"\b(anime|toonami|crunchyroll|hidive|naruto|one piece|midnight pulp)\b"
 SPORT = r"\b(NHL|hockey)\b"
 
 lines = open(f"{work}/us.m3u", encoding="utf-8").read().splitlines()
+import os
+# Merge the global relax list. Marked so the category filter lets it through.
+if os.path.exists(f"{work}/relax.m3u"):
+    for l in open(f"{work}/relax.m3u", encoding="utf-8").read().splitlines():
+        if l.startswith("#EXTINF") and 'group-title="' in l:
+            l = re.sub(r'group-title="[^"]*"', 'group-title="Relax"', l)
+        lines.append(l)
 
 # ---- 1. category filter ----------------------------------------------------
 cands, seen = [], set()
