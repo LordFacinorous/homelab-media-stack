@@ -114,6 +114,45 @@ minutes and is free.
    `--transfers 8 --checkers 16 --tpslimit 20`. There is no reason to go higher: the
    uplink is ~19.5 Mbit and the old 24/24 was buying nothing but 403s.
 
+## STOP - read this before switching client_id on this remote
+
+**The dedicated client_id was set up, authorised successfully, and then reverted. Here is
+why, because the trap is not obvious and it cost nothing only because it was checked.**
+
+This remote uses `scope = drive.file`. That scope grants an app access to **only the files
+that app itself created** - and "that app" means that OAuth client. Swap the client_id and
+the new client sees an empty Drive, because every existing file was created by the old one.
+
+Measured, 2026-09-06, immediately after a successful re-auth with the new client:
+
+    $ rclone lsd gdrive:                  # (nothing at all)
+    $ rclone lsd gdrive:prime-backup
+    ERROR : : error listing: directory not found
+
+All 6.5 GB was still in the Drive account. rclone simply could not see it. Had the 03:20
+timer fired in that state it would have found an empty destination and re-uploaded
+everything, leaving two disconnected copies and burning the uplink for a day.
+
+Reverting `~/.config/rclone/rclone.conf` to the pre-change copy restored it instantly -
+all thirteen directories listed again.
+
+**So there are only three real options, and none of them is "just set client_id":**
+
+1. **Stay on the shared client_id** (current state). The brakes in `backup.sh` - `--tpslimit
+   10`, default pacer, 4/8 transfers/checkers, `--retries 5` - are what keep it under the
+   shared quota, and they have held: a full ten-pair run with zero rateLimitExceeded.
+2. **Switch to the dedicated client AND widen the scope to `drive`.** Full Drive access
+   rather than only rclone's own files, so the new client can see the existing backups.
+   This is a genuine widening of what a compromised token could reach, and it needs a
+   re-auth. It is the only option that gets the dedicated quota AND keeps the data.
+3. **Switch client, keep `drive.file`, accept a full re-upload.** 6.5 GB back up the link,
+   and the old copy is orphaned - still consuming Drive quota, invisible to rclone forever.
+
+Option 2 is the only one that actually finishes the job, and it is a security decision
+rather than a technical one. The credentials are already in place for it: the client_id
+and secret are saved at `~/.config/rclone/rclone.conf.newclient-*`, so switching means
+restoring that file, changing `scope` to `drive`, and re-running `rclone config reconnect`.
+
 ## Do not
 
 - Do not remove `--tpslimit` while still on the shared client_id. It is the only setting
