@@ -21,6 +21,22 @@ TOPIC=$(tr -d '[:space:]' < "$TOPIC_FILE")
 result=$(systemctl --user show "$UNIT" -p Result --value 2>/dev/null)
 status=$(systemctl --user show "$UNIT" -p ExecMainStatus --value 2>/dev/null)
 
+# `systemctl stop` on a running oneshot sends SIGTERM, which systemd records as
+# Result=signal / 15/TERM and treats as a failure - so OnFailure fires and the phone gets a
+# red alert for a backup an operator stopped on purpose. That happened on 2026-09-06 18:16
+# and it is precisely the noise that teaches someone to ignore this channel, which would
+# cost far more than the alert is worth.
+#
+# Narrowly scoped on purpose. Only a clean TERM is suppressed:
+#   Result=timeout  still alerts (TimeoutStartSec expiry is a real failure)
+#   SIGKILL / 9     still alerts (OOM kill, or something forcing it down)
+#   any exit code   still alerts (the script itself failing)
+# A TERM at system shutdown is also suppressed, which is correct - that is not a fault.
+if [ "$result" = "signal" ] && [ "$status" = "15" ]; then
+  echo "$UNIT ended on SIGTERM (result=signal 15/TERM) - operator stop or shutdown, not alerting"
+  exit 0
+fi
+
 # The last few journal lines are what makes the alert actionable rather than merely
 # alarming. Keep it short - this is read on a phone.
 tail=$(journalctl --user -u "$UNIT" -n 12 --no-pager -o cat 2>/dev/null \
