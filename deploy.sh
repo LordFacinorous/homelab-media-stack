@@ -112,8 +112,11 @@ render_all() {
   done
   for f in "$TPL"/scripts/*.tmpl; do
     [ -e "$f" ] || continue
-    envsubst "$VARS" < "$f" > "$dest/scripts/$(basename "${f%.tmpl}")"
-    chmod +x "$dest/scripts/$(basename "${f%.tmpl}")"
+    b=$(basename "${f%.tmpl}")
+    envsubst "$VARS" < "$f" > "$dest/scripts/$b"
+    # Only actual programs get +x. exclude.txt is data that scripts read, and marking it
+    # executable says something false about what it is.
+    case "$b" in *.sh|*.py) chmod +x "$dest/scripts/$b" ;; esac
   done
 }
 
@@ -179,6 +182,17 @@ case "$MODE" in
         fi
       done
     done < <(grep -h '^ExecStart=' "$f" 2>/dev/null | sed 's/^ExecStart=//')
+  done
+  # Second half of the same class: a script that sources another file. `sources.sh` is
+  # shared by both backup scripts, and a shipped script sourcing an unshipped one fails on
+  # a fresh machine exactly like a unit pointing at a missing binary - except no unit
+  # mentions it, so the ExecStart pass above is blind to it.
+  for f in "$T"/scripts/*; do
+    [ -e "$f" ] || continue
+    while IFS= read -r dep; do
+      b=$(basename "$dep")
+      [ -e "$T/scripts/$b" ] || echo "  NOT SHIPPED $(basename "$f"): sources $dep, which deploy.sh never installs" >> "$guard_out"
+    done < <(grep -hoE '^[[:space:]]*\.[[:space:]]+/[^ "'"'"']+' "$f" 2>/dev/null | awk '{print $2}')
   done
   if [ -s "$guard_out" ]; then cat "$guard_out"; fail=1; else echo "  all ExecStart paths resolve"; fi
   rm -f "$guard_out"

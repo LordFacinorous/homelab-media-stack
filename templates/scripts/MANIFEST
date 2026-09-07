@@ -1,6 +1,7 @@
 backfill.py	arr
 backup.sh	backup
 deluge-portsync.sh	arr
+exclude.txt	backup
 livetv-guide.sh	arr
 ntfy-alert.sh	arr
 recordings-tidy.sh	arr

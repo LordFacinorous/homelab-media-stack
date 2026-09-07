@@ -67,7 +67,11 @@ s=0
 # go stale the moment a script is added - the failure being a unit whose ExecStart
 # points somewhere the file was never put.
 : > "$DST/scripts/MANIFEST"
-for f in "$SRC_S"/*.sh "$SRC_S"/*.py "$HOME"/services/backup/*.sh; do
+# exclude.txt is DATA, not a script, and both backup scripts read it with
+# --exclude-from. It was not shipped: on a fresh machine rclone would abort on a missing
+# exclude file and the whole backup would fail. The ExecStart guard cannot see this class
+# - the path lives inside a script, not in a unit - so the fix is to ship it.
+for f in "$SRC_S"/*.sh "$SRC_S"/*.py "$HOME"/services/backup/*.sh "$HOME"/services/backup/exclude.txt; do
   [ -e "$f" ] || continue
   b=$(basename "$f")
   render "$f" > "$DST/scripts/$b.tmpl"
