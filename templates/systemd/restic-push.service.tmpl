@@ -1,0 +1,16 @@
+[Unit]
+Description=Local encrypted backup of PRIME to tech-priest-02 (append-only restic)
+Documentation=file:${STACK_HOME}/services/backup/restic-push.sh
+After=network-online.target
+# Nothing watched the backups before: uptime-kuma sees dead endpoints, not units that ran
+# and failed. The Drive job failed silently on 2026-09-06 because of that gap.
+OnFailure=ntfy-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=${STACK_HOME}/services/backup/restic-push.sh
+# Same manners as the Drive job. Sources are on the NVMe and the arr stack's media is on
+# the spinning disk, so this does not contend at the device level - but stay polite anyway.
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+TimeoutStartSec=2h

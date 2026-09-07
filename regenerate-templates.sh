@@ -61,11 +61,23 @@ echo "  systemd units templated: $u"
 s=0
 # *.py as well as *.sh: backfill.py is Python, and globbing only *.sh would ship a
 # timer whose ExecStart points at a script the deployer never installs.
-for f in "$SRC_S"/*.sh "$SRC_S"/*.py "$HOME/services/backup/backup.sh"; do
+#
+# Scripts come from two directories and must be INSTALLED back into the matching one.
+# MANIFEST records which, so deploy.sh does not carry a hand-kept name list that would
+# go stale the moment a script is added - the failure being a unit whose ExecStart
+# points somewhere the file was never put.
+: > "$DST/scripts/MANIFEST"
+for f in "$SRC_S"/*.sh "$SRC_S"/*.py "$HOME"/services/backup/*.sh; do
   [ -e "$f" ] || continue
-  render "$f" > "$DST/scripts/$(basename "$f").tmpl"
+  b=$(basename "$f")
+  render "$f" > "$DST/scripts/$b.tmpl"
+  case "$(dirname "$f")" in
+    "$HOME/services/backup") printf '%s\tbackup\n' "$b" >> "$DST/scripts/MANIFEST" ;;
+    *)                       printf '%s\tarr\n'    "$b" >> "$DST/scripts/MANIFEST" ;;
+  esac
   s=$((s+1))
 done
+sort -o "$DST/scripts/MANIFEST" "$DST/scripts/MANIFEST"
 echo "  scripts templated: $s"
 
 echo "  -> $DST"

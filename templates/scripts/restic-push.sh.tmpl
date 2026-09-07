@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Local backup of PRIME's irreplaceable data to tech-priest-02, over the tailnet.
+#
+# The second copy. Google Drive (backup.sh) is the offsite one and stays exactly as it
+# is - different destination, different failure mode, and the Drive run is bounded by a
+# ~19.5 Mbit uplink where this one is a 2ms hop. Neither replaces the other.
+#
+# The repo is APPEND-ONLY from this side: these credentials can create snapshots and
+# cannot delete one. Retention and prune run on tech-priest-02 against the local path.
+# So `restic forget` here will fail, and that is the design working, not a fault.
+#
+# restic is used rather than rclone because /mnt/archive over there is unencrypted:
+# restic encrypts client-side, so the far filesystem never sees plaintext. Do not
+# "simplify" this into an rsync or a plain rclone sync.
+#
+#   ./restic-push.sh            one run (what the timer calls)
+#   ./restic-push.sh --dry-run  show what would be sent, write nothing
+set -uo pipefail
+
+BASE_DIR=${STACK_HOME}/services/backup
+CONF="$BASE_DIR/restic.env"
+LOG="$BASE_DIR/restic-last-run.log"
+DRY=""; [ "${1:-}" = "--dry-run" ] && DRY="--dry-run"
+
+[ -r "$CONF" ] || { echo "no $CONF - repo url, http credential and repo password go there (chmod 600)" >&2; exit 1; }
+set -a; . "$CONF"; set +a
+: "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY unset in $CONF}"
+: "${RESTIC_PASSWORD:?RESTIC_PASSWORD unset in $CONF}"
+
+. "$BASE_DIR/sources.sh"
+
+# MagicDNS resolves the bare name `tech-priest-02` to a STALE node (100.100.143.21,
+# offline) rather than the live one (tech-priest-02-1, 100.83.203.32). A repo URL using
+# the short name points at a machine that does not answer, and the failure looks like a
+# network problem rather than a name problem. Refuse it up front.
+# Extract the HOST, not a substring of the URL. The first version of this guard pattern
+# matched on "//tech-priest-02" and never fired, because the credential sits between:
+# rest:http://cogitator-prime:PASS@tech-priest-02:8000/... - tested, and it sailed through.
+repo_host=$(printf '%s' "$RESTIC_REPOSITORY" \
+            | sed -E 's|^[a-z0-9]+:||; s|^https?://||; s|^[^@/]*@||; s|[:/].*$||')
+case "$repo_host" in
+  tech-priest-02|tech-priest-02.tail*)
+    echo "REFUSING: repo host is '$repo_host'. MagicDNS resolves that bare name to the" >&2
+    echo "OFFLINE duplicate node (100.100.143.21), not the live one. The failure would look" >&2
+    echo "like a network fault rather than a name fault. Use tech-priest-02-1 or 100.83.203.32." >&2
+    exit 1 ;;
+esac
+
+# restic's --exclude-file and rclone's --exclude-from do not share a dialect: rclone
+# wants "node_modules/**", which in restic excludes the CONTENTS and leaves the empty
+# directory behind. Translate mechanically at run time rather than keeping a second
+# hand-edited list that would drift from exclude.txt.
+EX=$(mktemp); trap 'rm -f "$EX"' EXIT
+sed -e 's:/\*\*$::' -e '/^[[:space:]]*$/d' "$BACKUP_EXCLUDE" > "$EX"
+
+SRCS=()
+for pair in "${BACKUP_PAIRS[@]}"; do
+  p="$BACKUP_BASE/${pair%%:*}"
+  [ -e "$p" ] && SRCS+=("$p") || echo "-- SKIP (missing): $p"
+done
+[ ${#SRCS[@]} -gt 0 ] || { echo "no sources exist - refusing to snapshot nothing" >&2; exit 1; }
+
+{
+echo "=========== restic push $(date -Is) ==========="
+echo "repo: ${RESTIC_REPOSITORY%%://*}://<redacted>"
+echo "sources: ${#SRCS[@]}"
+
+restic backup "${SRCS[@]}" \
+  --exclude-file "$EX" \
+  --tag prime --tag nightly \
+  --host cogitator-prime \
+  --one-file-system \
+  $DRY \
+  --verbose=1
+rc=$?
+
+# An append-only repo rejects `forget`; retention is tech-priest-02's job. Only prove the
+# snapshot landed - reading back is the check that can actually fail.
+if [ $rc -eq 0 ] && [ -z "$DRY" ]; then
+  echo "-- verifying the snapshot is readable from this side"
+  restic snapshots --latest 1 --host cogitator-prime || rc=$?
+fi
+
+echo "=========== finished $(date -Is) rc=$rc ==========="
+exit $rc
+} 2>&1 | tee "$LOG"
+exit "${PIPESTATUS[0]}"

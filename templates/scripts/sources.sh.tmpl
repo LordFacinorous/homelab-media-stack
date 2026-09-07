@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# The single definition of what PRIME backs up.
+#
+# Sourced by BOTH backup.sh (offsite, rclone -> Google Drive) and restic-push.sh
+# (local, restic -> tech-priest-02). It exists because two copies of a list is one
+# list and one lie: the moment they disagree, one destination is quietly missing a
+# directory and nothing reports it. Every hand-kept list in this stack has already
+# drifted at least once.
+#
+# Left of the colon: path relative to BACKUP_BASE. Right: the destination name on
+# Google Drive. restic ignores the right-hand side - it stores real paths.
+
+BACKUP_BASE=${STACK_HOME}
+BACKUP_EXCLUDE=${STACK_HOME}/services/backup/exclude.txt
+
+BACKUP_PAIRS=(
+  "projects:projects"
+  "noosphere-prime:vault"
+  "tasks:tasks"
+  "knowledge:knowledge"
+  "docs:docs"
+  "Documents/DRACONIDS:draconids"
+  "Documents/DRACONIDS_git_backup_20260810:draconids-git-backup"
+  "Documents/School:school"
+  "Documents/ED:ed"
+  "services/arr/config:arr-config"
+)

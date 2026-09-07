@@ -86,10 +86,16 @@ fi
 
 # Where each rendered script belongs. The guard and the installer both use this, so a
 # unit's ExecStart and the file's install location cannot drift apart.
+# templates/scripts/MANIFEST says which directory each script came from, written by
+# regenerate-templates.sh. Reading it beats a hand-kept case list here: the list version
+# would silently send a newly added backup script to ARR_DIR, and the only symptom would
+# be a unit whose ExecStart points at a file that is not there.
 script_dest() {
-  case "$1" in
-    backup.sh) echo "$STACK_HOME/services/backup" ;;
-    *)         echo "$ARR_DIR" ;;
+  local tok
+  tok=$(awk -v n="$1" '$1 == n {print $2; exit}' "$TPL/scripts/MANIFEST" 2>/dev/null)
+  case "$tok" in
+    backup) echo "$STACK_HOME/services/backup" ;;
+    *)      echo "$ARR_DIR" ;;
   esac
 }
 

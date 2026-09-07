@@ -12,19 +12,11 @@ if ! rclone listremotes 2>/dev/null | grep -q "^${CRYPT}:"; then
   echo "ERROR: ${CRYPT}: remote not configured. Run 'rclone config' first." >&2; exit 1
 fi
 
-# source:destination pairs - only things that exist nowhere else
-PAIRS=(
-  "projects:projects"
-  "noosphere-prime:vault"
-  "tasks:tasks"
-  "knowledge:knowledge"
-  "docs:docs"
-  "Documents/DRACONIDS:draconids"
-  "Documents/DRACONIDS_git_backup_20260810:draconids-git-backup"
-  "Documents/School:school"
-  "Documents/ED:ed"
-  "services/arr/config:arr-config"
-)
+# source:destination pairs - only things that exist nowhere else.
+# Defined in sources.sh so the restic push to tech-priest-02 covers exactly the same
+# set. Two copies of this list would drift and one destination would silently go stale.
+. ${STACK_HOME}/services/backup/sources.sh
+PAIRS=("${BACKUP_PAIRS[@]}")
 
 # Rate limiting. On 2026-09-06 the projects and arr-config pairs - the two with by far
 # the most files - both died with HTTP 403 rateLimitExceeded, quota_metric

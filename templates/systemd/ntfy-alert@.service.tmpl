@@ -1,5 +1,13 @@
 [Unit]
 Description=Push a failed unit (%i) to the phone over ntfy
+# DEBUGGING NOTE: %n is the FULL unit name, suffix included, so OnFailure=ntfy-alert@%n.service
+# on prime-backup.service starts ntfy-alert@prime-backup.service.service - a DOUBLED suffix.
+#   journalctl --user -u ntfy-alert@prime-backup.service          -> returns NOTHING
+#   journalctl --user -u ntfy-alert@prime-backup.service.service  -> the actual run
+# Silence from the first form is indistinguishable from the alert never having fired, which
+# is exactly the wrong thing to be confused about while chasing a failed backup. Grep the
+# journal for "ntfy-alert" if in doubt. %n is kept rather than %N so tech-priest-02's units
+# read identically to these.
 
 [Service]
 Type=oneshot

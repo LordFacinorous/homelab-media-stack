@@ -1,0 +1,12 @@
+[Unit]
+Description=Nightly local backup of PRIME to tech-priest-02
+
+[Timer]
+# Deliberately BEFORE prime-backup (03:20 +40m jitter): the fast 2ms local copy lands
+# first, so a slow offsite run bounded by a ~19.5 Mbit uplink can never delay it.
+OnCalendar=*-*-* 02:00:00
+RandomizedDelaySec=20m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

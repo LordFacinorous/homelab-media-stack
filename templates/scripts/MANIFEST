@@ -1,0 +1,8 @@
+backfill.py	arr
+backup.sh	backup
+deluge-portsync.sh	arr
+livetv-guide.sh	arr
+ntfy-alert.sh	arr
+recordings-tidy.sh	arr
+restic-push.sh	backup
+sources.sh	backup
